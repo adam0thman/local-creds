@@ -74,6 +74,25 @@ def settle(page, PWTimeout):
             pass
 
 
+def probe(page, expr, PWTimeout, default=None):
+    """Evaluate something on the page, tolerating a navigation still in flight.
+
+    Submitting a logon form navigates, and an evaluate that lands mid-navigation throws
+    "Execution context was destroyed". That is not an answer about the logon -- it is
+    the verification step falling over -- so retry rather than report a verdict nobody
+    checked.
+    """
+    for _ in range(3):
+        try:
+            return page.evaluate(expr)
+        except Exception:
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except PWTimeout:
+                pass
+    return default
+
+
 def url_origin_str(url):
     """"scheme://host[:port]" for a url, or the url itself if it will not parse."""
     o = origin_of(url)
@@ -119,7 +138,16 @@ def submit_once(page):
     # Prefer the form's OWN submit button. A UI5 identity-first page (SAP ID is one)
     # ignores Enter entirely, and a form that never submitted looks exactly like a
     # rejected password if you only check whether the password box is still there.
-    clicked = page.evaluate("""() => {
+    clicked = _click_submit(page)
+    if not clicked:
+        page.keyboard.press("Enter")
+    return clicked
+
+
+def _click_submit(page):
+    """Click the logon form's submit control. Separated so submit_once stays readable."""
+    try:
+        return page.evaluate("""() => {
       const pw = document.querySelector('input[type=password]');
       // Do NOT scope the search to the form's subtree. HTML5 lets a submit button sit
       // anywhere and bind to its form by the `form` attribute -- SAP ID's "Continue"
@@ -133,9 +161,8 @@ def submit_once(page):
       btn.click();
       return true;
     }""")
-    if not clicked:
-        page.keyboard.press("Enter")
-    return clicked
+    except Exception:
+        return False
 
 
 def selftest():
@@ -243,7 +270,16 @@ def main(argv):
         print("creds browser: PRODUCTION system", file=sys.stderr)
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=args.headless)
+        # --use-mock-keychain swaps the macOS Keychain for an empty one. Without it a
+        # site asking for a client certificate (accounts.sap.com does) pops a chooser
+        # listing the SAP Passports installed on this machine, which blocks page load
+        # until a human dismisses it -- and by then every wait below has expired.
+        #
+        # It also closes a real hole in the isolation this command claims: certificates
+        # live in the system keychain, not the browser profile, so a "throwaway" browser
+        # would otherwise still be offered the operator's personal certs.
+        browser = pw.chromium.launch(headless=args.headless,
+                                     args=["--use-mock-keychain"])
         # No storage_state and no user_data_dir: this context is in-memory only.
         context = browser.new_context()
         page = context.new_page()
@@ -334,17 +370,21 @@ def main(argv):
                     page.wait_for_load_state("networkidle", timeout=45000)
                 except PWTimeout:
                     pass
-                still_asking = page.evaluate(
-                    "!!document.querySelector('input[type=password]')")
+                still_asking = probe(
+                    page, "!!document.querySelector('input[type=password]')", PWTimeout)
                 # An error the page itself shows is the only positive evidence that a
                 # credential was rejected.
-                complaint = page.evaluate("""() => {
+                complaint = probe(page, """() => {
                   const el = document.querySelector(
                     '[role=alert], .sapMMessageStrip, .errorMessage, [class*=error i]');
                   return el && el.offsetParent ? (el.innerText || '').trim().slice(0, 200) : '';
-                }""")
+                }""", PWTimeout, "")
                 title = page.title()
-                if still_asking and not complaint and page.url == before:
+                if still_asking is None:
+                    print("creds browser: submitted, but the result could not be read "
+                          "-- check the screenshot; an attempt WAS used", file=sys.stderr)
+                    rc = 8
+                elif still_asking and not complaint and page.url == before:
                     # Nothing moved and nothing complained: the form never went. Saying
                     # "wrong password" here would send someone to reset a working one.
                     print("creds browser: the form did not submit -- no request was "

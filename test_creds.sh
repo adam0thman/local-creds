@@ -1101,6 +1101,12 @@ check "browser.py refuses a cross-origin redirect unless asked" \
   'grep -q "allow-redirect" "$HERE/browser.py" && \
    grep -q "origin_of(landed) not in allowed and not args.allow_redirect" "$HERE/browser.py"'
 
+# Client certs live in the system keychain, not the browser profile: without this the
+# "throwaway" browser is still offered the operator's personal SAP Passports, and the
+# chooser blocks page load until a human dismisses it.
+check "browser.py does not expose the system keychain to the throwaway browser" \
+  'grep -q "use-mock-keychain" "$HERE/browser.py"'
+
 check "browser.py uses a disposable in-memory context, never a persistent profile" \
   '! grep -qE "launch_persistent_context\(|user_data_dir *=" "$HERE/browser.py" && \
    grep -q "context.clear_cookies()" "$HERE/browser.py" && \
