@@ -185,7 +185,19 @@ no signal, because it invites trust.
 When you do not know the environment, default to `prd`. Over-guarding is an
 inconvenience; under-guarding is an outage.
 
-### 4.5 `fields.url` is a security boundary, not a bookmark
+### 4.5 Never widen the extension to make automation easier
+
+You cannot type a password into a page — that puts it in a tool call and therefore in a
+transcript. Use `creds browser <id>`, which fills the form from the child process's
+environment; you see "logged on" or "failed", never the secret.
+
+Do **not** reach for `externally_connectable`, the `tabs` permission, or a content
+script to solve this. The extension deliberately has no presence on any page until a
+human clicks it, and widening it so an agent can drive it trades a human-gesture
+requirement for nothing that `creds browser` does not already give you. The reasoning
+is in the README under "Not planned".
+
+### 4.6 `fields.url` is a security boundary, not a bookmark
 
 It is the origin the browser extension matches a page against before releasing a
 password. Store `scheme://host[:port]` — a path is ignored by matching. Never widen it
@@ -196,7 +208,7 @@ to a bare domain to "make it match more": exact origin comparison is what stops
 change one of those rules, change both, and remember the asymmetry — plaintext http is
 legitimate to a private address and never to a public one.
 
-### 4.6 Register a new `kind` in three places at once
+### 4.7 Register a new `kind` in three places at once
 
 `lint.py` (KINDS), `migrate.py` (`identity()`), `ui.html` (KINDS, KIND_FIELDS,
 `defaultProtocols`). A kind the UI does not know shows no selected option in the editor,

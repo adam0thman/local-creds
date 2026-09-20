@@ -769,6 +769,24 @@ secrets with audit, rotation and revocation, use a product built for that.
 
 Ideas, not commitments. Ordered by how much they would change daily use.
 
+### Not planned: making the extension agent-callable
+
+An agent driving a page cannot type a password — that would put the secret in a tool
+call and therefore in a transcript. The tempting fix is `externally_connectable`, so a
+page can ask the extension to fill itself.
+
+It is not planned, for two reasons. Chrome will not accept `<all_urls>` or a wildcard
+host there — patterns need a real second-level domain — so the manifest would have to
+be generated from the index and reloaded whenever an entry is added. And the workable
+variant (an extension page driven with a single-use token) needs the `tabs` permission,
+which is arbitrary-tab injection: precisely the privilege the extension was built
+without.
+
+[`creds browser`](#automated-logon-creds-browser) solves the same problem with no new
+trust boundary, so the extension stays minimal. If you find yourself needing the user's
+own Chrome for SSO sessions, add a persistent Playwright profile to `creds browser`
+rather than widening the extension.
+
 ### Browser extension — the harder pages
 
 Filling works on classic forms. Still open: logons inside an `<iframe>` (the injected
