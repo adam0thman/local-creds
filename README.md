@@ -809,21 +809,34 @@ mid-logon, and SAPUI5 screens that build their inputs late enough that a click a
 before the field exists. Each is a real case in an SAP estate; none is solved by
 guessing harder.
 
-### Automatic client-certificate selection
+### Client certificates — record them, do not automate them
 
-Some systems authenticate with an X.509 client certificate rather than a password —
-SAP SNC setups, and admin UIs that require a smartcard or a per-user cert. Browsers
-prompt with a certificate chooser, and picking the wrong one for the wrong customer is
-exactly the class of mistake this tool exists to prevent.
+Tried and abandoned, deliberately. What was learned is more useful than the feature.
 
-The goal: an entry records *which* certificate a given host expects, so the choice is
-driven by the index rather than by a dropdown you click through from memory. Likely
-pieces: a `cert` field (store reference, subject or thumbprint — never the private
-key), certificate awareness in `creds doctor` (is it present, is it expired), and
-selection surfaced through the same helper as the autofill extension.
+Some SAP systems accept an X.509 client certificate instead of a password — SAP
+Passports for the Support Portal, SNC setups, admin UIs behind a smartcard. The
+browser shows a chooser: three anonymous S-numbers, pick who you are. Choosing the
+wrong customer's identity is exactly the class of mistake this tool exists to prevent.
 
-Worth noting that certificate *stores* are platform-specific — macOS Keychain,
-Windows CAPI, NSS on Linux — so this is likely macOS-first like the rest.
+**Automating the choice is not worth it.** The chooser is a native browser dialog, so
+nothing can click it — not Playwright, not a desktop automation tool. The two ways
+around it are both bad:
+
+- Chromium's `AutoSelectCertificateForUrls` is an enterprise **policy**, needing a
+  managed plist and admin rights, which a personal tool has no business installing.
+- Playwright's `client_certificates` wants the certificate **and private key as files**,
+  which means exporting the key out of the keychain onto disk. That is a real security
+  downgrade — the key stops being protected by the OS — to automate a logon that
+  already works with a password.
+
+**What is worth doing, and is done:** the index records which certificate belongs to
+which S-User — subject, issuer, serial, expiry, and which store holds it. Public
+fields only; the private key is never referenced. An entry with no certificate says so
+(`cert:none`), because recording the absence stops someone hunting for one that was
+never issued.
+
+That solves the problem a human actually has. The dialog still needs a click, but you
+now know which row to click, and `creds` can warn before a certificate expires.
 
 ### Smaller things
 
