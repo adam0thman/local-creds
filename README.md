@@ -560,6 +560,12 @@ creds ui          # add: url = https://jira.example.com
 creds lint        # warns if it cannot be an origin
 ```
 
+An entry may list **several origins**, whitespace-separated — one system often answers
+on more than one name, and a federated logon types the password at the *identity
+provider* rather than the portal you started from. `me.sap.com`,
+`launchpad.support.sap.com` and `accounts.sap.com` belong on the same entry for that
+reason; list where the form actually lives.
+
 Matching is exact on scheme, host and port. A path is stored for convenience and
 ignored. `sap.example.com` never matches `sap.example.com.evil.io`, and an entry
 stored as `https` is not offered on an `http` page.

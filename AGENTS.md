@@ -239,6 +239,17 @@ on more than one name — an internal hostname and a public vanity URL, or a pai
 a VIP. That is a list, not a reason to duplicate the entry: two entries for one system
 means two passwords to rotate and one of them will be missed.
 
+**A federated logon needs the identity provider's origin, not just the portal's.**
+`me.sap.com` and `launchpad.support.sap.com` both redirect to `accounts.sap.com`, and
+that is where the password is actually typed. An entry listing only the portal matches
+nothing on the page that matters. Same for Microsoft (`login.microsoftonline.com`),
+Okta and any other SAML or OIDC flow: record where the form lives, not where the
+journey starts.
+
+Listing the IdP is also what lets `creds browser` run without `--allow-redirect`, which
+turns the cross-origin guard back on — it will still refuse an IdP the entry does not
+name, which is the whole point.
+
 Do not invent one. An origin you guessed either never matches (dead weight nobody
 re-checks) or points a credential somewhere unintended.
 
