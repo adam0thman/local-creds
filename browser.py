@@ -365,11 +365,25 @@ def main(argv):
                 # fill.js never submits, by design. Submitting is a separate, deliberate
                 # act here -- and it happens exactly once.
                 before = page.url
+                before_origin = page.evaluate("location.origin")
                 submit_once(page)
+                # A successful logon leaves the identity provider and then renders an
+                # application, which takes longer than the redirect itself. Screenshot
+                # and verdict must both wait for that, or a working logon is reported
+                # as unreadable and photographed half-painted.
                 try:
-                    page.wait_for_load_state("networkidle", timeout=45000)
+                    page.wait_for_function(
+                        "o => location.origin !== o || !document.querySelector("
+                        "'input[type=password]')", arg=before_origin, timeout=45000)
                 except PWTimeout:
                     pass
+                for settle_step in (
+                        lambda: page.wait_for_load_state("networkidle", timeout=45000),
+                        lambda: page.wait_for_load_state("load", timeout=20000)):
+                    try:
+                        settle_step()
+                    except PWTimeout:
+                        pass
                 still_asking = probe(
                     page, "!!document.querySelector('input[type=password]')", PWTimeout)
                 # An error the page itself shows is the only positive evidence that a
@@ -398,7 +412,10 @@ def main(argv):
                           file=sys.stderr)
                     rc = 6
                 else:
-                    print(f"creds browser: logged on -- {title}", file=sys.stderr)
+                    where = probe(page, "location.href", PWTimeout, "") or page.url
+                    print(f"creds browser: logged on -- {title or '(no title)'}",
+                          file=sys.stderr)
+                    print(f"  landed on {where[:110]}", file=sys.stderr)
                     rc = 0
 
             if args.shot:
