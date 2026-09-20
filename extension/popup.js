@@ -26,10 +26,13 @@ async function activeTab() {
 }
 
 const FILL_REASONS = {
-  "no-password-field": "no password box on this page",
+  "no-password-field": "no password box on this page, and no user id box either",
   "multiple-password-fields": "several password boxes — looks like a change-password form",
   "origin-changed": "the page navigated away; nothing was filled",
 };
+
+/** Words a row is matched against when filtering. */
+const hay = h => [h.id, h.user, h.customer, h.env, h.kind].join(" ").toLowerCase();
 
 function setupHelp(msg) {
   return `<p class="err">${esc(msg)}</p>
@@ -61,7 +64,7 @@ async function doFill(hit, origin, confirmed) {
     args: [r.user || "", r.secret, origin],
   });
   const out = res?.result || { ok: false, reason: "no-result" };
-  return out.ok ? { ok: true, filledUser: out.filledUser }
+  return out.ok ? { ok: true, filledUser: out.filledUser, step: out.step }
                 : { ok: false, error: FILL_REASONS[out.reason] || out.reason };
 }
 
@@ -75,44 +78,60 @@ async function doCopy(hit, origin, confirmed) {
 function row(hit, origin) {
   const el = document.createElement("div");
   el.className = "hit";
+  el.dataset.hay = hay(hit);
   el.innerHTML = `
     <div class="id">${esc(hit.id)}<span class="env${hit.prod ? " prod" : ""}">${esc(hit.env || "?")}</span></div>
     <div class="who">${esc(hit.user)}${hit.client ? " · client " + esc(hit.client) : ""}</div>
     ${hit.prod ? `<p class="warn">⚠ PRODUCTION</p>` : ""}
     <div class="btns"><button data-act="fill" class="primary">Fill</button>
-                      <button data-act="copy">Copy</button></div>
+                      <button data-act="user">Copy user</button>
+                      <button data-act="pw">Copy password</button></div>
     <p class="note" hidden></p>`;
 
   const note = el.querySelector(".note");
+  const say = (text, bad) => {
+    note.hidden = false;
+    note.className = bad ? "note err" : "note";
+    note.textContent = text;
+  };
+
   el.querySelectorAll("button").forEach(btn => {
     btn.onclick = async () => {
-      const filling = btn.dataset.act === "fill";
+      const act = btn.dataset.act;
+
+      // The user id is not a secret and is already in hand -- no host call, no
+      // production confirmation, nothing to leak.
+      if (act === "user") {
+        await navigator.clipboard.writeText(hit.user || "");
+        say(`Copied ${hit.user}`);
+        return;
+      }
+
       // Production gets its own explicit yes, mirroring CREDS_ALLOW_PROD=1 on the CLI.
       if (hit.prod && !confirm(
-        `${filling ? "Fill" : "Copy"} the PRODUCTION password for ${hit.id}?`)) return;
+        `${act === "fill" ? "Fill" : "Copy"} the PRODUCTION password for ${hit.id}?`)) return;
 
       el.querySelectorAll("button").forEach(b => b.disabled = true);
-      note.hidden = false;
-      note.className = "note";
-      note.textContent = "…";
+      say("…");
       try {
-        const r = filling ? await doFill(hit, origin, hit.prod)
-                          : await doCopy(hit, origin, hit.prod);
+        const r = act === "fill" ? await doFill(hit, origin, hit.prod)
+                                 : await doCopy(hit, origin, hit.prod);
         if (!r.ok) {
-          note.className = "note err";
-          note.textContent = r.error || "failed";
-        } else if (filling) {
-          note.textContent = r.filledUser
-            ? "Filled username and password. Not submitted — press Enter yourself."
-            : "Filled the password. Not submitted — press Enter yourself.";
-        } else {
+          say(r.error || "failed", true);
+        } else if (act !== "fill") {
           // Clipboards sync across devices and any app can read them. Say so.
-          note.textContent = "On your clipboard until you copy something else.";
+          say("On your clipboard until you copy something else.");
+        } else if (r.step === "username") {
+          // Identity-first page: this screen only wants the user id.
+          say("Filled the user id. Press Continue, then Fill again for the password.");
+        } else {
+          say(r.filledUser
+            ? "Filled username and password. Not submitted — press Enter yourself."
+            : "Filled the password. Not submitted — press Enter yourself.");
         }
       } catch (e) {
-        note.className = "note err";
-        note.textContent = /Cannot access|chrome:\/\//.test(e.message)
-          ? "the browser blocks extensions on this page" : e.message;
+        say(/Cannot access|chrome:\/\//.test(e.message)
+          ? "the browser blocks extensions on this page" : e.message, true);
       }
       el.querySelectorAll("button").forEach(b => b.disabled = false);
     };
@@ -154,9 +173,34 @@ function row(hit, origin) {
     return;
   }
   r.candidates.forEach(h => $("#out").appendChild(row(h, origin)));
-  // Opened by keyboard, one obvious answer: Enter should finish the job. Only when
-  // there is exactly one non-production match -- anything else is the human's choice.
-  if (r.candidates.length === 1 && !r.candidates[0].prod) {
+
+  // A shared identity provider can match every S-User you own. Scrolling a list of
+  // thirty to find one customer is worse than the terminal this replaces, so filter.
+  if (r.candidates.length > 3) {
+    const box = document.createElement("input");
+    box.type = "search";
+    box.id = "filter";
+    box.placeholder = `filter ${r.candidates.length} matches — customer, id, user…`;
+    box.autocomplete = "off";
+    box.spellcheck = false;
+    box.setAttribute("aria-label", "Filter matches");
+    $("#out").prepend(box);
+    const rows = [...$("#out").querySelectorAll(".hit")];
+    box.oninput = () => {
+      const terms = box.value.toLowerCase().split(/\s+/).filter(Boolean);
+      let shown = 0;
+      rows.forEach(el => {
+        const hit = terms.every(t => el.dataset.hay.includes(t));
+        el.hidden = !hit;
+        if (hit) shown++;
+      });
+      $("#count").textContent = terms.length ? `${shown} of ${rows.length}` : "";
+      // Filtered to one: Enter should finish the job without reaching for the mouse.
+      if (shown === 1) rows.find(el => !el.hidden).querySelector("button").focus();
+    };
+    box.focus();
+  } else if (r.candidates.length === 1 && !r.candidates[0].prod) {
+    // One obvious answer and nothing production: Enter finishes it.
     $("#out").querySelector("button[data-act=fill]").focus();
   }
 })();

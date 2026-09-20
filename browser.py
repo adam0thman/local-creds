@@ -332,27 +332,27 @@ def main(argv):
                 "([u, s, o]) => window.__creds_fill(u, s, o)",
                 [user, secret, landed])
 
-            if not result.get("ok") and result.get("reason") == "no-password-field" and user:
-                # Identity-first logon (SAP ID, Microsoft, Okta): the user id screen
-                # comes first and the password box does not exist until it is answered.
-                # Advancing sends NO password, so it costs nothing against lockout --
-                # which is why this may happen automatically, and exactly once.
-                box = page.query_selector("input[type=email], input[type=text]")
-                if box and box.is_visible():
-                    print("creds browser: identity-first logon -- entering the user id",
+            if result.get("ok") and result.get("step") == "username":
+                # fill.js put the user id in. Advancing to the password screen sends NO
+                # password, so it is not a logon attempt and must not consume the
+                # one-attempt guard -- hence _click_submit directly, not submit_once.
+                print("creds browser: identity-first logon -- entering the user id",
+                      file=sys.stderr)
+                if not _click_submit(page):
+                    page.keyboard.press("Enter")
+                settle(page, PWTimeout)
+                landed = probe(page, "location.origin", PWTimeout, landed)
+                if origin_of(landed) not in allowed and not args.allow_redirect:
+                    print(f"creds browser: refused -- ended on {landed}", file=sys.stderr)
+                    return 4
+                inject()
+                result = page.evaluate(
+                    "([u, s, o]) => window.__creds_fill(u, s, o)",
+                    [user, secret, landed])
+                if result.get("ok") and result.get("step") == "username":
+                    print("creds browser: the password screen never appeared",
                           file=sys.stderr)
-                    box.fill(user)
-                    box.press("Enter")
-                    settle(page, PWTimeout)
-                    landed = page.evaluate("location.origin")
-                    if origin_of(landed) not in allowed and not args.allow_redirect:
-                        print(f"creds browser: refused -- ended on {landed}",
-                              file=sys.stderr)
-                        return 4
-                    inject()
-                    result = page.evaluate(
-                        "([u, s, o]) => window.__creds_fill(u, s, o)",
-                        [user, secret, landed])
+                    return 5
 
             if not result.get("ok"):
                 print(f"creds browser: could not fill -- {result.get('reason')}",

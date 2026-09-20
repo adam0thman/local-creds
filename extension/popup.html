@@ -27,8 +27,15 @@
   .empty, .err { color:var(--dim); }
   .err { color:var(--bad); }
   ul { margin:4px 0 0 16px; padding:0; }
+  #filter { width:100%; box-sizing:border-box; font:inherit; padding:5px 8px;
+            border:1px solid var(--bd); border-radius:6px; margin:0 0 9px;
+            background:transparent; color:inherit; }
+  #filter:focus { outline:2px solid currentColor; outline-offset:-1px; }
+  #count { float:right; font-size:11px; color:var(--dim); font-weight:400; }
+  /* Thirty matches must not grow the popup past the screen. */
+  #out { max-height:460px; overflow-y:auto; }
 </style>
-<h1>creds</h1>
+<h1>creds<span id="count"></span></h1>
 <p class="origin" id="origin">…</p>
 <div id="out"></div>
 <script src="popup.js"></script>

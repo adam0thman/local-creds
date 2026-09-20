@@ -1140,6 +1140,23 @@ check "the field picker passes its unit tests" \
 
 # Autofill must never press the button. A form's action can have changed under it,
 # and choosing to log on is the human's call.
+# Identity-first logons show the user id screen first. Filling it sends no password,
+# so it cannot cost a lockout attempt -- but returning "no password box" and doing
+# nothing made Fill look broken on every SAP ID / Microsoft / Okta page.
+check "the injected script handles the identity-first user id screen" \
+  'grep -q "step: \"username\"" "$HERE/extension/fill.js" && \
+   grep -q "pickUserOnly" "$HERE/extension/fill.js"'
+
+check "the popup can filter a long candidate list" \
+  'grep -q "id=\"filter\"\|box.id = \"filter\"" "$HERE/extension/popup.js"'
+
+check "the popup can copy the user id as well as the password" \
+  'grep -q "data-act=\"user\"" "$HERE/extension/popup.js"'
+
+# The user id is not a secret: copying it must not call the host or ask about prod.
+check "copying the user id needs no host call" \
+  "grep -A4 'act === \"user\"' \"\$HERE/extension/popup.js\" | grep -q 'hit.user'"
+
 check "the injected script never submits a form" \
   '! grep -qE "\.submit\(|requestSubmit|click\(\)" "$HERE/extension/fill.js"'
 

@@ -2,7 +2,7 @@
 // descriptors precisely so the fiddly part can be checked here.
 //   node extension/fill.test.js
 const assert = require("assert");
-const { pickFields } = require("./fill.js");
+const { pickFields, pickUserOnly, plan } = require("./fill.js");
 
 const f = o => Object.assign({ type: "text", visible: true, disabled: false, readOnly: false }, o);
 let n = 0;
@@ -64,6 +64,65 @@ t("indices refer to the original array, not the filtered one", () => {
 t("a text field AFTER the password is not mistaken for the username", () => {
   const r = pickFields([f({ type: "password" }), f({ name: "captcha" })]);
   assert.strictEqual(r.userIdx, -1);
+});
+
+// --- identity-first: the SAP ID / Microsoft / Okta first screen -----------------
+t("picks the user id box when there is no password box yet", () => {
+  assert.strictEqual(pickUserOnly([f({ name: "j_username" })]), 0);
+});
+
+t("prefers an autocomplete=username hint over position", () => {
+  assert.strictEqual(pickUserOnly(
+    [f({ name: "search" }), f({ name: "u", autocomplete: "username" })]), 1);
+});
+
+t("accepts autocomplete=email too", () => {
+  assert.strictEqual(pickUserOnly(
+    [f({ name: "q" }), f({ name: "e", autocomplete: "email" })]), 1);
+});
+
+t("skips hidden and disabled boxes on the identity screen", () => {
+  assert.strictEqual(pickUserOnly(
+    [f({ visible: false }), f({ disabled: true }), f({ name: "real" })]), 2);
+});
+
+t("never offers a password box as the user id box", () => {
+  assert.strictEqual(pickUserOnly([f({ type: "password" })]), -1);
+});
+
+t("says so when there is nothing typeable at all", () => {
+  assert.strictEqual(pickUserOnly([f({ type: "checkbox" }), f({ type: "hidden" })]), -1);
+});
+
+// --- plan(): the branch that decides what Fill actually does --------------------
+t("a normal logon form plans a password fill", () => {
+  const r = plan([f({ name: "u" }), f({ type: "password" })], "S1");
+  assert.deepStrictEqual(r, { action: "password", userIdx: 0, pwIdx: 1 });
+});
+
+t("the SAP ID first screen plans a username fill, not a refusal", () => {
+  // This is the case that made Fill look broken: a user id box, no password box.
+  const r = plan([f({ name: "j_username" })], "S0020967337");
+  assert.deepStrictEqual(r, { action: "username", userIdx: 0 });
+});
+
+t("no user to type means the identity screen is refused, not half-filled", () => {
+  const r = plan([f({ name: "j_username" })], "");
+  assert.strictEqual(r.action, "refuse");
+});
+
+t("a change-password form is still refused, user id or not", () => {
+  const r = plan([f({ name: "u" }), f({ type: "password" }), f({ type: "password" })], "S1");
+  assert.deepStrictEqual(r, { action: "refuse", reason: "multiple-password-fields" });
+});
+
+t("a page with nothing typeable is refused", () => {
+  assert.strictEqual(plan([f({ type: "checkbox" })], "S1").action, "refuse");
+});
+
+t("a password box present means password, never the username step", () => {
+  const r = plan([f({ name: "u" }), f({ type: "password" })], "S1");
+  assert.strictEqual(r.action, "password", "must not regress to the identity screen");
 });
 
 console.log(`  fill.js: ${n} unit tests passed`);

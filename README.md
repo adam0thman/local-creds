@@ -612,6 +612,20 @@ presence on any page until the moment you click Fill, and the injected code runs
 Chrome's isolated world, so page scripts can neither see it nor read the argument
 carrying the password.
 
+**Identity-first logons work.** SAP ID, Microsoft and Okta ask who you are on one
+screen and for your password on the next. Fill answers the first screen — which sends
+no password and so cannot cost a lockout attempt — and tells you to press Continue and
+click Fill again. `creds browser` does both steps without stopping.
+
+**Copy gives you either.** The user id is not a secret, so copying it needs no host
+call and no production confirmation. Useful on that first screen, and when a form
+defeats the filler entirely.
+
+**A long list filters.** A shared identity provider matches every S-User you own, so
+past three matches the popup grows a search box — type a customer name and Enter fills
+the one that is left. Scrolling thirty rows would be worse than the terminal this
+replaces.
+
 Two cases are refused rather than guessed:
 
 | Page | Why |

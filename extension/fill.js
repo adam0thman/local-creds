@@ -50,6 +50,42 @@
     };
   }
 
+  /**
+   * Index of the field that wants a user id, when there is no password box at all.
+   *
+   * Identity-first logons (SAP ID, Microsoft, Okta) ask who you are on one screen and
+   * for your password on the next. Pure, so it is unit-tested with the rest.
+   */
+  function pickUserOnly(inputs) {
+    const usable = [];
+    inputs.forEach((f, i) => {
+      if (f && f.visible && !f.disabled && !f.readOnly && TEXTY.includes(f.type))
+        usable.push({ f, i });
+    });
+    if (!usable.length) return -1;
+    const hinted = usable.find(u =>
+      ["username", "email"].includes(String(u.f.autocomplete || "").toLowerCase()));
+    return hinted ? hinted.i : usable[0].i;
+  }
+
+  /**
+   * What to do with this page, decided from field descriptors alone.
+   *
+   * Pure on purpose. This is the branch that decides between "type the password",
+   * "this is the user id screen of an identity-first logon" and "refuse" -- and
+   * getting it wrong made Fill look broken on every SAP ID page. A decision that
+   * matters that much should not be reachable only through a real DOM.
+   */
+  function plan(inputs, user) {
+    const pick = pickFields(inputs);
+    if (pick.ok) return { action: "password", userIdx: pick.userIdx, pwIdx: pick.pwIdx };
+    if (pick.reason === "no-password-field" && user) {
+      const ui = pickUserOnly(inputs);
+      if (ui >= 0) return { action: "username", userIdx: ui };
+    }
+    return { action: "refuse", reason: pick.reason };
+  }
+
   // Assigning .value directly does not tell React, Angular or UI5 anything -- their
   // state stays empty and the form submits blank. Going through the native setter and
   // then firing the events they listen for is what makes the value real.
@@ -81,19 +117,27 @@
       return { ok: false, reason: "origin-changed", actual: location.origin };
     }
     const els = Array.from(document.querySelectorAll("input"));
-    const pick = pickFields(els.map(describe));
-    if (!pick.ok) return pick;
+    const what = plan(els.map(describe), user);
 
-    setValue(els[pick.pwIdx], secret);
+    if (what.action === "refuse") return { ok: false, reason: what.reason };
+
+    if (what.action === "username") {
+      // Sends no password, so it cannot cost a lockout attempt.
+      setValue(els[what.userIdx], user);
+      els[what.userIdx].focus();
+      return { ok: true, step: "username", filledUser: true, submitted: false };
+    }
+
+    setValue(els[what.pwIdx], secret);
     let filledUser = false;
-    if (pick.userIdx >= 0 && user) {
-      setValue(els[pick.userIdx], user);
+    if (what.userIdx >= 0 && user) {
+      setValue(els[what.userIdx], user);
       filledUser = true;
     }
-    els[pick.pwIdx].focus();
-    return { ok: true, filledUser, submitted: false };
+    els[what.pwIdx].focus();
+    return { ok: true, step: "password", filledUser, submitted: false };
   }
 
   if (typeof window !== "undefined") window.__creds_fill = fill;
-  if (typeof module !== "undefined") module.exports = { pickFields };
+  if (typeof module !== "undefined") module.exports = { pickFields, pickUserOnly, plan };
 })();
