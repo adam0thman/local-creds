@@ -685,7 +685,19 @@ learned the hard way.
 
 ## Licence and scope
 
-MIT. See `LICENSE`.
+**Apache License 2.0** — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+
+Free for commercial and non-commercial use, modification and redistribution,
+including in closed-source products. In return you must keep the copyright and
+licence notice, include the `NOTICE` file, and state any files you changed.
+
+Apache 2.0 rather than MIT for two reasons that matter to this audience: it grants
+patent rights explicitly, which enterprise legal review looks for, and its attribution
+terms are the more definite of the two.
+
+To be clear about what attribution means here: you must preserve the notices in copies
+of the software. You are **not** required to credit this project visibly in your own
+product's UI or documentation.
 
 This is a personal tool shared in case it is useful. It is **not** an enterprise secret
 manager: there is no audit log, no sharing model, no rotation workflow, and no HSM. It
