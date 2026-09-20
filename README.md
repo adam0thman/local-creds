@@ -62,8 +62,8 @@ usernames are confidential too, which matters when the file sits in cloud storag
 ## How it works
 
 ```
-  ~/.local-creds/creds.age        the index, age-encrypted    (syncs; safe at rest)
-  ~/.config/age/local-creds.key   your private key            (per machine, NEVER syncs)
+  ~/.local-creds/creds.age        the index, age-encrypted    (safe to sync; optional)
+  ~/.config/age/local-creds.key   your private key            (per machine, NEVER sync)
   creds                           decrypts in memory per command
 ```
 
@@ -143,16 +143,36 @@ ln -s "$PWD/creds" ~/.local/bin/creds        # ensure ~/.local/bin is on your PA
 **data** from `LOCAL_CREDS_DIR` (default `~/.local-creds`). The two are independent, so
 the checkout and the index can live in completely different places.
 
-If you want them together — the simplest setup — make the data dir a symlink to the
-checkout and keep the checkout in synced storage:
+### Where to keep the index
+
+`creds` does not care how the index gets to your other machines — it only reads
+`LOCAL_CREDS_DIR`. Point it at whatever you already use:
 
 ```bash
-ln -s ~/Dropbox/Projects/local-creds ~/.local-creds
+# A: index inside the checkout, checkout in whatever folder you sync
+ln -s /path/to/your/synced/folder/local-creds ~/.local-creds
+
+# B: index somewhere else entirely, checkout wherever you like
+export LOCAL_CREDS_DIR=/path/to/your/synced/folder/creds-data
+
+# C: no sync at all — single machine, plain local directory
+mkdir -p ~/.local-creds        # the default; nothing else to do
 ```
 
-> **Careful with synced folders.** If your sync client changes its path (e.g. macOS
-> Dropbox moving out of `~/Library/CloudStorage`), a stale symlink can *hang* rather
-> than fail, and every `creds` command appears to freeze. Re-point the symlinks.
+Any file-sync tool works: iCloud Drive, OneDrive, Dropbox, Google Drive, Nextcloud,
+Syncthing, a private git repo, or a USB stick you carry. The index is a single
+encrypted file, so it needs no special handling — and because the whole file is
+encrypted, a sync provider you do not fully trust is an acceptable place to put it.
+
+Only two things must **not** sync: your private key at
+`~/.config/age/local-creds.key`, and the optional Python venv (compiled wheels are
+per-machine).
+
+> **If your sync folder ever moves, re-point the symlink.** Sync clients do relocate
+> their roots between versions. A symlink pointing into a path that no longer mounts
+> can *hang* rather than fail cleanly, and then every `creds` command appears to freeze
+> with no error. If that happens, check the symlink first — `readlink ~/.local-creds`
+> is safe and does not touch the dead path.
 
 ---
 
@@ -701,5 +721,6 @@ product's UI or documentation.
 
 This is a personal tool shared in case it is useful. It is **not** an enterprise secret
 manager: there is no audit log, no sharing model, no rotation workflow, and no HSM. It
-is a good fit for one practitioner with many systems and a synced folder. If you need
+is a good fit for one practitioner with many systems, on one machine or several. If you
+need
 team-wide secret management, use a real secret manager.
