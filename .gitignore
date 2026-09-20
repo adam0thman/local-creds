@@ -1,0 +1,34 @@
+# ─── NEVER COMMIT ────────────────────────────────────────────────────────────
+# The encrypted index. Safe at rest, but git keeps every historical version
+# forever, and one repo accidentally made public is unrecoverable.
+creds.age
+*.age
+
+# age keys. The private key must never leave the machine that generated it.
+*.key
+local-creds.key
+
+# Recipient public keys are safe cryptographically, but they enumerate the
+# owner's machines. Personal config, not project content.
+recipients.txt
+
+# Pre-save snapshots of the index — same content, same reasoning.
+.backups/
+
+# ─── LICENSED / MACHINE-SPECIFIC ─────────────────────────────────────────────
+# SAP JCo is licensed by SAP and is NOT redistributable. Obtain it yourself and
+# drop it here, or point CREDS_JCO_LIB at your copy. See README.
+lib/
+*.jar
+*.dylib
+*.so
+
+# ─── LOCAL NOISE ─────────────────────────────────────────────────────────────
+# Diagnostic logs routinely contain real hostnames, users and error text.
+*.log
+__pycache__/
+*.pyc
+.DS_Store
+.claude/
+venv/
+.venv/

@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>creds — local credential index</title>
+<style>
+:root {
+  --bg: oklch(97% 0.004 250); --surface: oklch(100% 0 0); --sunk: oklch(94.5% 0.006 250);
+  --line: oklch(88% 0.008 250); --text: oklch(24% 0.01 250); --dim: oklch(52% 0.012 250);
+  --accent: oklch(52% 0.16 258); --prd: oklch(52% 0.19 25); --qas: oklch(62% 0.14 75);
+  --dev: oklch(55% 0.13 155); --ok: oklch(52% 0.15 150); --bad: oklch(53% 0.19 25);
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sans: ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+  --r: 7px; --fast: 130ms; --ease: cubic-bezier(.16,1,.3,1);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: oklch(17% 0.012 260); --surface: oklch(21% 0.014 260); --sunk: oklch(14.5% 0.012 260);
+    --line: oklch(29% 0.016 260); --text: oklch(93% 0.006 260); --dim: oklch(66% 0.014 260);
+    --accent: oklch(72% 0.14 258); --prd: oklch(68% 0.17 25); --qas: oklch(78% 0.13 78);
+    --dev: oklch(72% 0.13 158); --ok: oklch(72% 0.14 152); --bad: oklch(70% 0.17 25); }
+}
+:root[data-theme="dark"] { --bg: oklch(17% 0.012 260); --surface: oklch(21% 0.014 260); --sunk: oklch(14.5% 0.012 260);
+  --line: oklch(29% 0.016 260); --text: oklch(93% 0.006 260); --dim: oklch(66% 0.014 260);
+  --accent: oklch(72% 0.14 258); --prd: oklch(68% 0.17 25); --qas: oklch(78% 0.13 78);
+  --dev: oklch(72% 0.13 158); --ok: oklch(72% 0.14 152); --bad: oklch(70% 0.17 25); }
+:root[data-theme="light"] { --bg: oklch(97% 0.004 250); --surface: oklch(100% 0 0); --sunk: oklch(94.5% 0.006 250);
+  --line: oklch(88% 0.008 250); --text: oklch(24% 0.01 250); --dim: oklch(52% 0.012 250);
+  --accent: oklch(52% 0.16 258); --prd: oklch(52% 0.19 25); --qas: oklch(62% 0.14 75);
+  --dev: oklch(55% 0.13 155); --ok: oklch(52% 0.15 150); --bad: oklch(53% 0.19 25); }
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans);
+  height: 100vh; display: grid; grid-template-rows: auto 1fr; overflow: hidden; }
+
+header { display: flex; gap: 14px; align-items: baseline; padding: 12px 18px;
+  background: var(--surface); border-bottom: 1px solid var(--line); }
+header h1 { margin: 0; font: 600 15px/1 var(--mono); letter-spacing: -.02em; }
+header h1 span { color: var(--accent); }
+#stats { color: var(--dim); font: 11px/1 var(--mono); }
+header .sp { flex: 1; }
+button { font: 500 12px/1 var(--sans); padding: 7px 12px; border-radius: var(--r);
+  border: 1px solid var(--line); background: var(--surface); color: var(--text); cursor: pointer;
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease), transform var(--fast) var(--ease); }
+button:hover { border-color: var(--accent); background: var(--sunk); }
+button:active { transform: translateY(1px); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+button.primary:disabled { opacity: .4; cursor: default; transform: none; }
+button.danger:hover { border-color: var(--bad); color: var(--bad); }
+
+main { display: grid; grid-template-columns: minmax(280px, 27%) 1fr; min-height: 0; }
+#list { border-right: 1px solid var(--line); display: grid; grid-template-rows: auto 1fr; min-height: 0;
+  background: var(--sunk); }
+.searchwrap { padding: 10px; border-bottom: 1px solid var(--line); }
+#q { width: 100%; padding: 9px 11px; border-radius: var(--r); border: 1px solid var(--line);
+  background: var(--surface); color: var(--text); font: 13px var(--mono); }
+#q:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 18%, transparent); }
+#rows { overflow-y: auto; min-height: 0; }
+.row { padding: 9px 12px; border-bottom: 1px solid var(--line); cursor: pointer;
+  border-left: 3px solid transparent; transition: background var(--fast) var(--ease); }
+.row:hover { background: var(--surface); }
+.row[aria-selected="true"] { background: var(--surface); border-left-color: var(--accent); }
+.row .id { font: 600 12px var(--mono); word-break: break-all; }
+.row .meta { color: var(--dim); font: 10.5px var(--mono); margin-top: 3px; word-break: break-all; }
+.badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font: 700 9.5px/1.5 var(--mono);
+  text-transform: uppercase; letter-spacing: .06em; border: 1px solid currentColor; }
+.env-prd { color: var(--prd); } .env-qas, .env-tst { color: var(--qas); }
+.env-dev, .env-sbx, .env-trn { color: var(--dev); }
+
+#detail { overflow-y: auto; padding: 20px 24px 60px; min-height: 0; }
+.empty { color: var(--dim); font: 13px var(--mono); padding: 40px 0; text-align: center; }
+h2 { margin: 0 0 2px; font: 700 19px/1.2 var(--mono); letter-spacing: -.02em; word-break: break-all; }
+.sub { color: var(--dim); font: 11.5px var(--mono); margin-bottom: 16px; }
+fieldset { border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px 14px; margin: 0 0 16px;
+  background: var(--surface); }
+legend { font: 700 10px var(--mono); text-transform: uppercase; letter-spacing: .1em; color: var(--dim); padding: 0 6px; }
+.grid { display: grid; grid-template-columns: 128px 1fr; gap: 7px 10px; align-items: center; }
+label { font: 500 11.5px var(--mono); color: var(--dim); }
+input[type=text], select { width: 100%; padding: 6px 9px; border-radius: 5px; border: 1px solid var(--line);
+  background: var(--sunk); color: var(--text); font: 12.5px var(--mono); }
+input:focus, select:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.kv { display: grid; grid-template-columns: 128px 1fr auto; gap: 7px 10px; align-items: center; margin-bottom: 7px; }
+.kv input:first-child { font-weight: 600; }
+.x { border: none; background: none; color: var(--dim); font-size: 15px; padding: 2px 7px; line-height: 1; }
+.x:hover { color: var(--bad); background: none; border: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px 3px 9px; border-radius: 20px;
+  border: 1px solid var(--line); background: var(--sunk); font: 11px var(--mono); }
+.chip button { border: none; background: none; padding: 0 2px; color: var(--dim); font-size: 13px; line-height: 1; }
+.chip button:hover { color: var(--bad); background: none; }
+.rowbtns { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+#result { position: relative; margin-top: 10px; padding: 10px 34px 10px 12px; border-radius: var(--r);
+  font: 12px var(--mono); border: 1px solid var(--line); background: var(--sunk);
+  white-space: pre-wrap; word-break: break-word; }
+#rclose { position: absolute; top: 5px; right: 6px; border: none; background: none; color: inherit;
+  font-size: 15px; line-height: 1; padding: 3px 6px; opacity: .65; }
+#rclose:hover { opacity: 1; background: none; border: none; }
+#unsaved { color: var(--prd); font: 600 11px var(--mono); }
+dialog { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface);
+  color: var(--text); padding: 0; max-width: 400px; box-shadow: 0 20px 50px oklch(0% 0 0 / .28); }
+dialog::backdrop { background: oklch(0% 0 0 / .45); }
+dialog form { padding: 18px 20px 14px; display: grid; gap: 9px; }
+dialog h3 { margin: 0; font: 700 14px var(--mono); }
+dialog p { margin: 0; color: var(--dim); font: 11px var(--mono); }
+dialog input { padding: 7px 9px; border-radius: 5px; border: 1px solid var(--line);
+  background: var(--sunk); color: var(--text); font: 12.5px var(--mono); width: 100%; }
+dialog menu { display: flex; gap: 8px; justify-content: flex-end; margin: 6px 0 0; padding: 0; }
+#pwerr { color: var(--bad); min-height: 15px; }
+.pwmeta { display: block; margin-top: 5px; font: 10.5px var(--mono); color: var(--dim); }
+.pwmeta.bad { color: var(--prd); }
+.proto { display: grid; grid-template-columns: 122px 82px 1fr auto auto; gap: 6px;
+  align-items: center; margin-bottom: 5px; }
+.proto + .presult { grid-column: 1 / -1; }
+.presult { font: 11px var(--mono); color: var(--dim); margin: -1px 0 9px 128px;
+  white-space: pre-wrap; word-break: break-word; }
+.presult.ok { color: var(--ok); } .presult.bad { color: var(--bad); }
+.presult .note { display: block; color: var(--dim); }
+.proto select, .proto input { font-size: 12px; }
+.lrow { display: grid; grid-template-columns: 30px 70px 1fr 150px auto auto auto auto auto; gap: 5px;
+        align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.lrow input { font-size: 12px; }
+.lrow + .presult { grid-column: 1 / -1; }
+.star { padding: 5px 7px; line-height: 1; }
+#result.ok { border-color: var(--ok); color: var(--ok); }
+#result.bad { border-color: var(--bad); color: var(--bad); }
+#result .note { color: var(--dim); display: block; margin-top: 5px; }
+#toast { position: fixed; bottom: 18px; left: 50%; translate: -50% 0; padding: 9px 16px; border-radius: var(--r);
+  background: var(--text); color: var(--bg); font: 500 12px var(--mono); opacity: 0; pointer-events: none;
+  transition: opacity var(--fast) var(--ease), translate var(--fast) var(--ease); }
+#toast.show { opacity: 1; translate: -50% -6px; }
+.warn { color: var(--prd); font: 11px var(--mono); margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>creds<span>/</span>index</h1>
+  <output id="stats" aria-live="polite"></output>
+  <span id="unsaved" aria-live="polite"></span>
+  <span class="sp"></span>
+  <button id="theme" title="Toggle theme">◐</button>
+  <button id="add">+ New entry</button>
+  <button id="save" class="primary" disabled>Save</button>
+</header>
+
+<main>
+  <nav id="list" aria-label="Entries">
+    <div class="searchwrap">
+      <input id="q" type="text" placeholder="customer, SID, IP, host, tag…" autocomplete="off" spellcheck="false" aria-label="Search entries">
+    </div>
+    <div id="rows" role="listbox"></div>
+  </nav>
+  <section id="detail" aria-live="polite"><p class="empty">Select an entry, or search above.</p></section>
+</main>
+<div id="toast" role="status"></div>
+
+<dialog id="pwdlg" aria-labelledby="pwtitle">
+  <form method="dialog">
+    <h3 id="pwtitle">Set password</h3>
+    <p id="pwfor"></p>
+    <input type="password" id="pw1" placeholder="new password" autocomplete="new-password">
+    <input type="password" id="pw2" placeholder="confirm password" autocomplete="new-password">
+    <p id="pwerr" role="alert"></p>
+    <p>Leave both blank and confirm to <strong>clear</strong> the stored password.
+       Nothing is written until you press Save.</p>
+    <menu>
+      <button value="cancel" id="pwcancel">Cancel</button>
+      <button value="ok" id="pwok" class="primary">Set</button>
+    </menu>
+  </form>
+</dialog>
+
+<script>
+const TOKEN = "__TOKEN__";
+const api = (p, opt = {}) => fetch(p, {
+  ...opt, headers: { "X-Creds-Token": TOKEN, "Content-Type": "application/json", ...(opt.headers || {}) }
+}).then(async r => { const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j; });
+
+let idx = { version: 1, entries: [] }, sel = null, dirty = false;
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const toast = m => { const t = $("#toast"); t.textContent = m; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 2200); };
+const setDirty = v => {
+  dirty = v; $("#save").disabled = !v;
+  $("#unsaved").textContent = v ? "● unsaved — nothing is written until you Save" : "";
+};
+
+// SAP documents a 40-char maximum, but HEC/RISE technical users are issued longer
+// generated passwords that do log on (verified against TBQ with a 72-char secret).
+// So this is a note, never a block.
+const SAP_KINDS = ["abap", "rfc", "jco", "nco", "sapgui", "odata"];
+const pwNote = e => {
+  const n = (e.secret || "").length;
+  if (!n) return { txt: "no password stored", bad: false };
+  if (SAP_KINDS.includes(e.kind) && n > 40)
+    return { txt: `${n} chars — longer than SAP's documented 40-char max; test before assuming it is wrong`, bad: false };
+  return { txt: `${n} chars stored`, bad: false };
+};
+
+const TOP = ["id", "customer", "env", "kind", "host", "port", "user", "secret", "via"];
+const KINDS = ["abap", "java", "hana", "ssh", "sftp", "odata", "api", "bo", "vpn", "rdp",
+               "vmware", "db", "file", "other", "rfc", "sapgui", "jco", "nco"];
+
+// Kinds where one system legitimately has several (client, user, password) sets.
+// SAP GUI and RFC are two ports on one ABAP system sharing one login, so they are
+// one `abap` entry: ports in protocols[], accounts in logins[].
+const LOGIN_KINDS = ["abap"];
+const usesLogins = e => LOGIN_KINDS.includes(e.kind);
+
+// Fields a kind needs before it can actually be used. Surfaced in the editor so an
+// entry that looks complete but cannot connect is visible at a glance.
+const KIND_FIELDS = {
+  abap:   ["sid", "sysnr"],
+  vmware: [],
+  java:   ["sid", "sysnr"],
+  rfc:    ["sid", "client", "sysnr"],
+  sapgui: ["sid", "sysnr"],
+  hana:   ["instance"],
+  api:    ["base_url", "verify_path", "auth_style"],
+  // oauth2 needs a token endpoint as well; the editor surfaces it once auth_style says so.
+  bo:     ["base_url", "auth_type"],
+  rdp:    [],
+  vpn:    [],
+  ssh:    [], sftp: [], file: [], odata: ["client"],
+};
+const ENVS = ["dev", "tst", "qas", "sbx", "trn", "prd"];
+
+// Search haystack: everything a human might type -- customer, SID, IP, host, tags, field values.
+const hay = e => [e.id, e.customer, e.env, e.kind, e.host, e.port, e.user,
+  (e.tags || []).join(" "), (e.requires || []).join(" "), e.via,
+  (e.protocols || []).map(p => p.type).join(" "),
+  (e.logins || []).map(l => `${l.user || ""} ${l.client || ""}`).join(" "),
+  Object.values(e.fields || {}).join(" ")].join(" ").toLowerCase();
+
+function render() {
+  const terms = $("#q").value.toLowerCase().split(/\s+/).filter(Boolean);
+  let list = idx.entries.filter(e => terms.every(t => hay(e).includes(t)));
+  if (!list.length && terms.length) list = idx.entries.filter(e => terms.some(t => hay(e).includes(t)));
+  list.sort((a, b) => (a.id || "").localeCompare(b.id || ""));
+
+  $("#stats").textContent = `${list.length}/${idx.entries.length} shown · ${idx.entries.filter(e => e.env === "prd").length} prod`;
+  $("#rows").innerHTML = list.map(e => `
+    <div class="row" role="option" tabindex="0" data-id="${esc(e.id)}" aria-selected="${e.id === sel}">
+      <div class="id">${esc(e.id)}</div>
+      <div class="meta"><span class="badge env-${esc(e.env || "")}">${esc(e.env || "?")}</span>
+        ${esc(e.kind || "")} · ${esc(e.host || "no host")}</div>
+    </div>`).join("") || `<p class="empty">no match</p>`;
+  $("#rows").querySelectorAll(".row").forEach(r => {
+    const pick = () => { sel = r.dataset.id; render(); detail(); };
+    r.onclick = pick;
+    r.onkeydown = ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(); } };
+  });
+}
+
+function entry() { return idx.entries.find(e => e.id === sel); }
+
+/** Required-but-empty fields for this entry's kind. */
+function missingFor(e) {
+  const f = e.fields || {};
+  const need = [...(KIND_FIELDS[e.kind] || [])];
+  // Conditional requirement: only the oauth2 style needs a token endpoint.
+  if (e.kind === "api" && String(f.auth_style || "").toLowerCase() === "oauth2")
+    need.push("token_url");
+  return need.filter(k => !String(f[k] ?? "").trim());
+}
+
+function detail() {
+  const e = entry();
+  if (!e) { $("#detail").innerHTML = `<p class="empty">Select an entry, or search above.</p>`; return; }
+  const fields = Object.entries(e.fields || {});
+  $("#detail").innerHTML = `
+    <h2>${esc(e.id)}</h2>
+    <p class="sub">${esc(e.customer || "no customer")} · ${esc(e.kind || "?")} · ${esc(e.host || "no host")}</p>
+    ${e.env === "prd" ? `<p class="warn">⚠ PRODUCTION — creds exec refuses this without CREDS_ALLOW_PROD=1</p>` : ""}
+    <div class="rowbtns">
+      <button id="testall" class="primary">Test all methods</button>
+      <button id="test">Test reachability</button>
+      <button id="testauth">Test login</button>
+      <button id="dup">Duplicate</button>
+      <button id="del" class="danger">Delete entry</button>
+    </div>
+    <div id="result" hidden></div>
+
+    <fieldset><legend>Connection</legend><div class="grid">
+      ${TOP.filter(k => !(usesLogins(e) && (k === "user" || k === "secret")))
+           .map(k => `<label for="f-${k}">${k}</label>${
+        k === "kind" ? `<select id="f-${k}">${KINDS.map(o => `<option${o === e.kind ? " selected" : ""}>${o}</option>`).join("")}</select>`
+        : k === "env" ? `<select id="f-${k}">${ENVS.map(o => `<option${o === e.env ? " selected" : ""}>${o}</option>`).join("")}</select>`
+        : k === "secret"
+          ? `<span><span style="display:flex;gap:6px">
+               <input type="text" id="f-secret" value="${esc(e.secret)}" readonly
+                      style="-webkit-text-security:disc" placeholder="(empty)">
+               <button id="reveal" type="button">show</button>
+               <button id="copypw" type="button">copy</button>
+               <button id="setpw" type="button">Change…</button></span>
+             <small class="pwmeta${pwNote(e).bad ? " bad" : ""}">${esc(pwNote(e).txt)}</small></span>`
+          : `<input type="text" id="f-${k}" value="${esc(e[k] ?? "")}">`}`).join("")}
+    </div></fieldset>
+
+    <fieldset><legend>Requires — connectivity prerequisites</legend>
+      <div class="chips" id="reqs"></div>
+      <p class="sub" style="margin:8px 0 0">e.g. <code>vpn:example.corp</code>, <code>router:/H/sapsso…</code>,
+      an entry id to jump through, or <code>internet</code>. Shown before you connect; not auto-enforced.</p>
+    </fieldset>
+
+    <fieldset><legend>Logon methods — each tested independently</legend>
+      <div id="protos"></div>
+      <div class="rowbtns" style="margin:8px 0 0">
+        <button id="addproto">+ Add method</button>
+        <button id="defproto">Suggest from kind</button>
+      </div>
+    </fieldset>
+
+    ${usesLogins(e) ? `<fieldset><legend>Logins — one system, several accounts</legend>
+      <div id="logins"></div>
+      <div class="rowbtns" style="margin:8px 0 0"><button id="addlogin">+ Add login</button></div>
+      <p class="sub" style="margin:8px 0 0">The starred login is the default.
+      <code>creds exec --as USER --client NNN</code> picks any other.</p>
+    </fieldset>` : ""}
+
+    <fieldset><legend>Tags</legend><div class="chips" id="tags"></div></fieldset>
+
+    <fieldset><legend>Fields — free key/value</legend>
+      ${missingFor(e).length
+        ? `<p class="pwmeta bad" style="margin:0 0 9px">${esc(e.kind)} needs:
+             ${missingFor(e).map(k => `<code>${esc(k)}</code>`).join(" ")} —
+             not set, so this entry cannot connect yet</p>`
+        : ""}
+      <div id="kvs">${fields.map(([k, v], i) => kvRow(k, v, i)).join("")}</div>
+      <button id="addkv">+ Add field</button>
+    </fieldset>`;
+
+  const wire = (id, fn) => { const el = $(id); if (el) el.oninput = el.onchange = fn; };
+  TOP.forEach(k => wire(`#f-${k}`, ev => {
+    let v = ev.target.value;
+    if (k === "port") v = v === "" ? null : (isNaN(+v) ? v : +v);
+    if (k === "id") { const old = e.id; e.id = v; if (sel === old) sel = v; }
+    else e[k] = v;
+    setDirty(true); render();
+  }));
+  const rev = $("#reveal");
+  if (rev) rev.onclick = () => {
+    const inp = $("#f-secret"), on = inp.style.webkitTextSecurity === "disc";
+    inp.style.webkitTextSecurity = on ? "none" : "disc"; rev.textContent = on ? "hide" : "show";
+  };
+  const setpw = $("#setpw");
+  if (setpw) setpw.onclick = () => openPwDialog(e, e.id);
+  const copypw = $("#copypw");
+  if (copypw) copypw.onclick = () => copyText(e.secret, `password for ${e.id}`);
+  if (usesLogins(e)) {
+    drawLogins();
+    $("#addlogin").onclick = () => {
+      e.logins = [...(e.logins || []), { client: "", user: "", secret: "" }];
+      setDirty(true); drawLogins();
+    };
+  }
+  drawProtos();
+  $("#addproto").onclick = () => { e.protocols = [...(e.protocols || []), { type: "tcp" }]; setDirty(true); drawProtos(); };
+  $("#defproto").onclick = () => { e.protocols = defaultProtocols(e); setDirty(true); drawProtos(); };
+  $("#testall").onclick = testAll;
+  chips("#reqs", "requires", "add prerequisite…");
+  chips("#tags", "tags", "add tag…");
+  $("#addkv").onclick = () => { e.fields = e.fields || {}; e.fields[""] = ""; setDirty(true); detail(); };
+  bindKvs();
+  $("#test").onclick = () => runTest("reach");
+  $("#testauth").onclick = () => runTest("auth");
+  $("#dup").onclick = () => {
+    const c = JSON.parse(JSON.stringify(e)); c.id = e.id + "-copy";
+    // A copy has NOT been tested. Carrying over pw:/host: verification tags would
+    // assert something true of the original credential about a different one.
+    c.tags = (c.tags || []).filter(t => !/^(pw:|host:|net:)/.test(t));
+    if (c.fields) { delete c.fields.last_test; delete c.fields.hana_version; }
+    // Same reasoning as the tags: a copy has not been granted these passwords.
+    if (c.logins) c.logins = c.logins.map(l => ({ ...l, secret: "" }));
+    idx.entries.push(c); sel = c.id; setDirty(true); render(); detail();
+  };
+  $("#del").onclick = () => {
+    if (!confirm(`Delete "${e.id}"? This only takes effect when you press Save.`)) return;
+    idx.entries = idx.entries.filter(x => x !== e); sel = null; setDirty(true); render(); detail();
+  };
+}
+
+// One row per (client, user, password). The password is never rendered into the
+// DOM as text -- only its length -- for the same reason creds never echoes one.
+function drawLogins() {
+  const e = entry(), rows = e.logins || [];
+  $("#logins").innerHTML = rows.length ? rows.map((l, i) => `
+    <div class="lrow">
+      <button class="star" data-i="${i}" title="${l.default ? "default login" : "make default"}"
+              type="button">${l.default ? "★" : "☆"}</button>
+      <input type="text" data-i="${i}" data-k="client" value="${esc(l.client ?? "")}"
+             placeholder="client" aria-label="client">
+      <input type="text" data-i="${i}" data-k="user" value="${esc(l.user ?? "")}"
+             placeholder="user" aria-label="user">
+      <input type="text" class="lsec" data-i="${i}" readonly value="${esc(l.secret ?? "")}"
+             style="-webkit-text-security:disc" placeholder="(no password)"
+             aria-label="password for ${esc(l.user ?? "")}">
+      <button class="lshow" data-i="${i}" type="button">show</button>
+      <button class="lcopy" data-i="${i}" type="button">copy</button>
+      <button class="ltest" data-i="${i}" type="button">Test</button>
+      <button class="lpw" data-i="${i}" type="button">Change…</button>
+      <button class="lrm" data-i="${i}" type="button" aria-label="Remove login">×</button>
+    </div>`).join("")
+    : `<p class="sub" style="margin:0">No logins yet. Without one, the flat
+       <code>user</code>/<code>secret</code> on the entry is used.</p>`;
+
+  // Scoped to [data-k]: the row now also holds a readonly password field, and a bare
+  // "input" selector would write logins[i][undefined] if an event ever fired on it.
+  $("#logins").querySelectorAll("input[data-k]").forEach(inp => {
+    inp.oninput = () => {
+      e.logins[+inp.dataset.i][inp.dataset.k] = inp.value;
+      setDirty(true); render();
+    };
+  });
+  $("#logins").querySelectorAll(".star").forEach(b => b.onclick = () => {
+    // Exactly one default, or creds silently takes the first of several.
+    e.logins.forEach((l, j) => { if (j === +b.dataset.i) l.default = true; else delete l.default; });
+    setDirty(true); drawLogins();
+  });
+  $("#logins").querySelectorAll(".lshow").forEach(b => b.onclick = () => {
+    const inp = $("#logins").querySelector(`.lsec[data-i="${b.dataset.i}"]`);
+    const masked = inp.style.webkitTextSecurity === "disc";
+    inp.style.webkitTextSecurity = masked ? "none" : "disc";
+    b.textContent = masked ? "hide" : "show";
+  });
+  $("#logins").querySelectorAll(".lcopy").forEach(b => b.onclick = () => {
+    const l = e.logins[+b.dataset.i];
+    copyText(l.secret, `password for ${l.user || "(no user)"}@${l.client || "-"}`);
+  });
+  $("#logins").querySelectorAll(".ltest").forEach(b => b.onclick = async () => {
+    const l = e.logins[+b.dataset.i];
+    b.disabled = true;
+    const prev = b.textContent; b.textContent = "…";
+    try {
+      const r = await api("/api/test", { method: "POST", body: JSON.stringify({
+        mode: "auth", entry: e, login: { user: l.user, client: l.client } }) });
+      showResult(`${r.ok ? "✓" : "✕"} <b>${esc(l.user || "(no user)")}@${esc(l.client || "-")}</b>
+        [${esc(r.kind)}] ${esc(r.detail)}` +
+        (r.notes || []).map(n => `<span class="note">· ${esc(n)}</span>`).join(""), r.ok);
+    } catch (err) { showResult("✕ " + esc(err.message), false); }
+    finally { b.disabled = false; b.textContent = prev; }
+  });
+  $("#logins").querySelectorAll(".lpw").forEach(b => b.onclick = () => {
+    const l = e.logins[+b.dataset.i];
+    openPwDialog(l, `${l.user || "(no user)"}@${l.client || "-"} on ${e.id}`, e.kind, drawLogins);
+  });
+  $("#logins").querySelectorAll(".lrm").forEach(b => b.onclick = () => {
+    const l = e.logins[+b.dataset.i];
+    if (l.secret && !confirm(`Remove the login ${l.user || "(no user)"}@${l.client || "-"}? Its stored password goes with it.`)) return;
+    e.logins = e.logins.filter((_, j) => j !== +b.dataset.i);
+    setDirty(true); drawLogins(); render();
+  });
+}
+
+const PROTO_TYPES = ["disp", "gateway", "msgserver", "rfc", "java-http", "java-https", "p4", "vmware",
+                     "icm-http", "icm-https", "odata", "api", "bo", "rdp", "ssh", "sftp", "hana", "tcp"];
+const NEEDS_PATH = ["icm-http", "icm-https", "odata", "api", "bo"];
+
+// Sensible starting set per kind, so the 53 imported entries need no hand-entry.
+function defaultProtocols(e) {
+  const f = e.fields || {};
+  const n = /^\d+$/.test(String(f.sysnr ?? "")) ? +f.sysnr : null;
+  if (["abap", "rfc", "jco", "nco", "sapgui"].includes(e.kind)) {
+    // The three ports every ABAP stack listens on, then the two real logon checks.
+    const p = n === null ? [{ type: "disp" }, { type: "gateway" }, { type: "msgserver" }]
+      : [{ type: "disp", port: 3200 + n }, { type: "gateway", port: 3300 + n },
+         { type: "msgserver", port: 3600 + n },
+         { type: "icm-http", port: 8000 + n }, { type: "icm-https", port: 44300 + n }];
+    return [...p, { type: "rfc" }];
+  }
+  // NW Java derives its ports from the instance number too, but on 5<nn>xx:
+  // 5<nn>00 HTTP, 5<nn>01 HTTPS, 5<nn>04 P4 (RMI), 5<nn>08 telnet admin.
+  if (e.kind === "java") {
+    if (n === null) return [{ type: "java-http" }];
+    return [{ type: "java-http", port: 50000 + n * 100 },
+            { type: "java-https", port: 50001 + n * 100 },
+            { type: "p4", port: 50004 + n * 100 }];
+  }
+  if (e.kind === "vmware") return [{ type: "tcp", port: e.port || 443 }, { type: "vmware" }];
+  if (e.kind === "hana") return [{ type: "tcp" }, { type: "hana" }];
+  if (e.kind === "ssh" || e.kind === "sftp") return [{ type: "tcp", port: 22 }, { type: e.kind }];
+  if (e.kind === "odata") return [{ type: "odata" }];
+  if (e.kind === "api") return [{ type: "tcp", port: e.port || 443 }, { type: "api" }];
+  if (e.kind === "bo") return [{ type: "tcp", port: e.port || 8443 }, { type: "bo" }];
+  if (e.kind === "vpn") return [{ type: "tcp", port: e.port || 443 }];
+  if (e.kind === "rdp") return [{ type: "tcp", port: e.port || 3389 }, { type: "rdp" }];
+  return [{ type: "tcp" }];
+}
+
+function drawProtos() {
+  const e = entry(), list = e.protocols || [];
+  const box = $("#protos");
+  if (!list.length) {
+    box.innerHTML = `<p class="sub" style="margin:0">No logon methods declared.
+      "Suggest from kind" fills in the usual set for <code>${esc(e.kind)}</code>.</p>`;
+    return;
+  }
+  box.innerHTML = list.map((p, i) => `
+    <div class="proto" data-i="${i}">
+      <select data-role="type">${PROTO_TYPES.map(t =>
+        `<option${t === p.type ? " selected" : ""}>${t}</option>`).join("")}</select>
+      <input type="text" data-role="port" value="${esc(p.port ?? "")}" placeholder="port" aria-label="port">
+      <input type="text" data-role="path" value="${esc(p.path ?? "")}"
+             placeholder="${NEEDS_PATH.includes(p.type) ? "/sap/bc/ping" : "—"}"
+             ${NEEDS_PATH.includes(p.type) ? "" : "disabled"} aria-label="path">
+      <button data-role="test">Test</button>
+      <button class="x" data-role="x" aria-label="Remove method">×</button>
+    </div>
+    <div class="presult" data-r="${i}"></div>`).join("");
+
+  box.querySelectorAll(".proto").forEach(row => {
+    const i = +row.dataset.i;
+    const sync = () => {
+      const p = { type: row.querySelector('[data-role=type]').value };
+      const port = row.querySelector('[data-role=port]').value.trim();
+      const path = row.querySelector('[data-role=path]').value.trim();
+      if (port) p.port = isNaN(+port) ? port : +port;
+      if (path) p.path = path;
+      e.protocols[i] = p; setDirty(true);
+    };
+    row.querySelector('[data-role=type]').onchange = () => { sync(); drawProtos(); };
+    row.querySelectorAll("input").forEach(inp => inp.onchange = sync);
+    row.querySelector('[data-role=x]').onclick = () => {
+      e.protocols = e.protocols.filter((_, j) => j !== i); setDirty(true); drawProtos();
+    };
+    row.querySelector('[data-role=test]').onclick = () => testProto(i);
+  });
+}
+
+async function testProto(i) {
+  const e = entry(), out = $(`.presult[data-r="${i}"]`);
+  const btn = document.querySelector(`.proto[data-i="${i}"] [data-role=test]`);
+  if (!out) return;
+  out.className = "presult"; out.textContent = "testing…";
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api("/api/test", {
+      method: "POST", body: JSON.stringify({ entry: e, protocol: e.protocols[i] }) });
+    out.className = "presult " + (r.ok ? "ok" : "bad");
+    out.innerHTML = `${r.ok ? "✓" : "✕"} ${esc(r.detail)}` +
+      (r.notes || []).map(n => `<span class="note">· ${esc(n)}</span>`).join("");
+  } catch (err) {
+    out.className = "presult bad"; out.textContent = "✕ " + err.message;
+  } finally { if (btn) btn.disabled = false; }
+}
+
+// Sequential, not parallel: a burst of failed logons across methods is how you
+// get a technical user locked out.
+async function testAll() {
+  const e = entry();
+  if (!(e.protocols || []).length) {
+    showResult("no logon methods declared — press “Suggest from kind” first", false);
+    return;
+  }
+  const btn = $("#testall");
+  btn.disabled = true;
+  showResult(`testing ${e.protocols.length} method(s) in sequence…`, null);
+  for (let i = 0; i < e.protocols.length; i++) await testProto(i);
+  const results = [...document.querySelectorAll(".presult")].filter(x => x.textContent.trim());
+  const ok = results.filter(x => x.classList.contains("ok")).length;
+  showResult(`${ok}/${results.length} method(s) succeeded — see each row below`, ok > 0);
+  btn.disabled = false;
+}
+
+function kvRow(k, v, i) {
+  return `<div class="kv" data-i="${i}">
+    <input type="text" value="${esc(k)}" data-role="k" aria-label="field name">
+    <input type="text" value="${esc(v)}" data-role="v" aria-label="field value">
+    <button class="x" data-role="x" title="Remove" aria-label="Remove field">×</button></div>`;
+}
+
+function bindKvs() {
+  const e = entry();
+  $("#kvs").querySelectorAll(".kv").forEach(row => {
+    const rebuild = () => {
+      const out = {};
+      $("#kvs").querySelectorAll(".kv").forEach(r => {
+        const k = r.querySelector('[data-role=k]').value.trim();
+        if (k) out[k] = r.querySelector('[data-role=v]').value;
+      });
+      e.fields = out; setDirty(true); render();
+    };
+    row.querySelectorAll("input").forEach(i => i.onchange = rebuild);
+    row.querySelector('[data-role=x]').onclick = () => { row.remove(); rebuild(); };
+  });
+}
+
+function chips(sel_, key, placeholder) {
+  const e = entry(), box = $(sel_);
+  const draw = () => {
+    const vals = e[key] || [];
+    box.innerHTML = vals.map((v, i) =>
+      `<span class="chip">${esc(v)}<button data-i="${i}" aria-label="Remove ${esc(v)}">×</button></span>`).join("") +
+      `<input type="text" id="new-${key}" placeholder="${placeholder}" style="width:230px">`;
+    box.querySelectorAll(".chip button").forEach(b => b.onclick = () => {
+      e[key] = vals.filter((_, i) => i !== +b.dataset.i); setDirty(true); draw();
+    });
+    const inp = box.querySelector(`#new-${key}`);
+    // Commit on blur as well as Enter. Typing a value and clicking away used to
+    // discard it silently, which reads as "Save is broken".
+    const commit = refocus => {
+      const v = inp.value.trim();
+      if (!v) return;
+      inp.value = "";                       // clear before redraw so blur cannot double-add
+      e[key] = [...(e[key] || []), v];
+      setDirty(true); draw();
+      if (refocus) box.querySelector(`#new-${key}`).focus();
+    };
+    inp.onkeydown = ev => { if (ev.key === "Enter") { ev.preventDefault(); commit(true); } };
+    inp.onblur = () => commit(false);
+  };
+  draw();
+}
+
+// Successes clear themselves; failures stay put so you can actually read them.
+// Either way there is an explicit × — nothing is trapped on screen.
+let resTimer;
+function showResult(html, ok) {
+  const box = $("#result");
+  clearTimeout(resTimer);
+  box.hidden = false;
+  box.className = ok === null ? "" : ok ? "ok" : "bad";
+  box.innerHTML = `<button id="rclose" type="button" aria-label="Dismiss">×</button>` + html;
+  $("#rclose").onclick = () => { clearTimeout(resTimer); box.hidden = true; };
+  if (ok === true) resTimer = setTimeout(() => { box.hidden = true; }, 4000);
+}
+
+async function runTest(mode) {
+  const btns = [$("#test"), $("#testauth")];
+  showResult(mode === "auth" ? "attempting logon…" : "testing reachability…", null);
+  btns.forEach(b => b.disabled = true);
+  try {
+    const r = await api("/api/test", {
+      method: "POST", body: JSON.stringify({ mode, entry: entry() }) });
+    showResult(`${r.ok ? "✓" : "✕"} [${esc(r.kind)}] ${esc(r.detail)}` +
+      (r.notes || []).map(n => `<span class="note">· ${esc(n)}</span>`).join(""), r.ok);
+  } catch (err) {
+    showResult("✕ " + esc(err.message), false);
+  } finally { btns.forEach(b => b.disabled = false); }
+}
+
+// `target` is anything with a .secret: the entry itself, or one of its logins.
+// navigator.clipboard needs a secure context; 127.0.0.1 qualifies, but fall back to
+// the old execCommand path so a copy button is never silently dead.
+async function copyText(text, what) {
+  if (!text) { toast(`${what}: nothing stored to copy`); return; }
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;opacity:0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    if (!ok) { toast("could not reach the clipboard"); return; }
+  }
+  // The browser cannot safely clear this later the way `creds copy` does, so say so
+  // rather than implying it expires.
+  toast(`${what} copied — stays on the clipboard until you copy something else`);
+}
+
+function openPwDialog(target, label, kind, after) {
+  const dlg = $("#pwdlg");
+  kind = kind ?? target.kind;
+  after = after ?? detail;
+  $("#pwfor").textContent = label ?? target.id;
+  $("#pw1").value = ""; $("#pw2").value = "";
+  $("#pwerr").textContent = ""; delete $("#pwerr").dataset.warned;
+  $("#pwok").onclick = ev => {
+    const a = $("#pw1").value, b = $("#pw2").value;
+    if (a !== b) { ev.preventDefault(); $("#pwerr").textContent = "the two entries do not match"; return; }
+    if (a && SAP_KINDS.includes(kind) && a.length > 40 && !$("#pwerr").dataset.warned) {
+      ev.preventDefault();
+      $("#pwerr").dataset.warned = "1";
+      $("#pwerr").textContent =
+        `${a.length} chars is over SAP's documented 40 — press Set again to keep it anyway`;
+      return;
+    }
+    if (!a && !confirm(`Clear the stored password for "${label ?? target.id}"?`)) { ev.preventDefault(); return; }
+    target.secret = a; setDirty(true); after();
+  };
+  dlg.showModal();
+  $("#pw1").focus();
+}
+
+$("#save").onclick = async () => {
+  try {
+    const r = await api("/api/index", { method: "POST", body: JSON.stringify(idx) });
+    setDirty(false); toast(`saved — ${r.count} entries re-encrypted`);
+  } catch (err) { toast("NOT saved: " + err.message); }
+};
+
+$("#add").onclick = () => {
+  const e = { id: "new-entry", customer: "", env: "dev", kind: "rfc", host: "", port: null,
+    user: "", secret: "", via: null, requires: [], tags: [], fields: {} };
+  idx.entries.push(e); sel = e.id; $("#q").value = ""; render(); detail(); setDirty(true);
+};
+
+$("#theme").onclick = () => {
+  const cur = document.documentElement.dataset.theme
+    || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  document.documentElement.dataset.theme = cur === "dark" ? "light" : "dark";
+};
+
+let t; $("#q").oninput = () => { clearTimeout(t); t = setTimeout(render, 90); };
+addEventListener("beforeunload", ev => { if (dirty) { ev.preventDefault(); ev.returnValue = ""; } });
+addEventListener("keydown", ev => {
+  if ((ev.metaKey || ev.ctrlKey) && ev.key === "s") { ev.preventDefault(); if (dirty) $("#save").click(); }
+  if ((ev.metaKey || ev.ctrlKey) && ev.key === "k") { ev.preventDefault(); $("#q").focus(); $("#q").select(); }
+});
+
+api("/api/index").then(j => {
+  idx = j;
+  idx.entries.forEach(e => {
+    e.requires = e.requires || []; e.tags = e.tags || [];
+    e.fields = e.fields || {}; e.protocols = e.protocols || [];
+  });
+  render();
+}).catch(err => { $("#rows").innerHTML = `<p class="empty">${esc(err.message)}</p>`; });
+</script>
+</body>
+</html>

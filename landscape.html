@@ -1,0 +1,512 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>creds — landscape</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root {
+  --bg: oklch(99% 0 0); --panel: oklch(97.5% 0 0); --sunk: oklch(95% 0 0);
+  --line: oklch(88% 0 0); --ink: oklch(24% 0 0); --dim: oklch(52% 0 0);
+  --accent: oklch(52% 0.16 255); --bad: oklch(52% 0.19 27); --warn: oklch(62% 0.15 75);
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --r: 7px;
+  --n-client: oklch(60% 0.12 285); --n-network: oklch(58% 0.13 200);
+  --n-saprouter: oklch(60% 0.14 165); --n-appserver: oklch(55% 0.15 255);
+  --n-db: oklch(58% 0.14 45); --n-other: oklch(58% 0.02 260);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: oklch(17% 0.008 260); --panel: oklch(21% 0.008 260); --sunk: oklch(25% 0.008 260);
+    --line: oklch(32% 0.01 260); --ink: oklch(93% 0 0); --dim: oklch(66% 0 0);
+    --accent: oklch(72% 0.15 250); --bad: oklch(70% 0.17 25); --warn: oklch(78% 0.14 78);
+    --n-client: oklch(70% 0.12 285); --n-network: oklch(70% 0.12 200);
+    --n-saprouter: oklch(72% 0.13 165); --n-appserver: oklch(70% 0.14 255);
+    --n-db: oklch(72% 0.13 45); --n-other: oklch(68% 0.02 260);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: oklch(17% 0.008 260); --panel: oklch(21% 0.008 260); --sunk: oklch(25% 0.008 260);
+  --line: oklch(32% 0.01 260); --ink: oklch(93% 0 0); --dim: oklch(66% 0 0);
+  --accent: oklch(72% 0.15 250); --bad: oklch(70% 0.17 25); --warn: oklch(78% 0.14 78);
+  --n-client: oklch(70% 0.12 285); --n-network: oklch(70% 0.12 200);
+  --n-saprouter: oklch(72% 0.13 165); --n-appserver: oklch(70% 0.14 255);
+  --n-db: oklch(72% 0.13 45); --n-other: oklch(68% 0.02 260);
+}
+* { box-sizing: border-box; }
+body { margin: 0; height: 100vh; display: grid; grid-template-rows: auto 1fr;
+       background: var(--bg); color: var(--ink); font: 13px/1.45 var(--sans); overflow: hidden; }
+header { display: flex; gap: 10px; align-items: center; padding: 9px 14px;
+         border-bottom: 1px solid var(--line); background: var(--panel); }
+h1 { font: 600 13px var(--mono); margin: 0; letter-spacing: -.2px; }
+h1 a { color: var(--dim); text-decoration: none; }
+h1 a:hover { color: var(--accent); }
+.grow { flex: 1; }
+button, select, input { font: 500 12px/1 var(--sans); padding: 7px 11px; border-radius: var(--r);
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+button:hover { border-color: var(--accent); background: var(--sunk); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+button.primary:disabled { opacity: .4; cursor: default; }
+button.on { border-color: var(--accent); color: var(--accent); }
+main { display: grid; grid-template-columns: 1fr 320px; overflow: hidden; }
+#wrap { position: relative; overflow: hidden; background:
+  radial-gradient(circle at 1px 1px, var(--line) 1px, transparent 0) 0 0 / 24px 24px; }
+svg { width: 100%; height: 100%; display: block; touch-action: none; }
+aside { border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; padding: 14px; }
+aside h2 { font: 600 13px var(--mono); margin: 0 0 2px; word-break: break-all; }
+aside .sub { color: var(--dim); font-size: 11.5px; margin: 0 0 12px; }
+fieldset { border: 1px solid var(--line); border-radius: var(--r); padding: 10px; margin: 0 0 12px; }
+legend { font: 600 10px var(--sans); text-transform: uppercase; letter-spacing: .07em; color: var(--dim); padding: 0 5px; }
+.grid { display: grid; grid-template-columns: 76px 1fr; gap: 6px 8px; align-items: center; }
+.grid label { font-size: 11px; color: var(--dim); }
+.grid input, .grid select { width: 100%; font-size: 12px; }
+.pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 20px;
+        background: var(--sunk); border: 1px solid var(--line); font: 500 11px var(--mono); margin: 0 4px 4px 0; }
+.pill button { border: 0; background: none; padding: 0 0 0 2px; color: var(--dim); font-size: 13px; }
+.pill button:hover { color: var(--bad); background: none; }
+.empty { color: var(--dim); padding: 24px 4px; text-align: center; font-size: 12px; }
+.hint { color: var(--dim); font-size: 11px; margin: 10px 0 0; }
+kbd { font: 500 10px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px;
+      border-radius: 4px; padding: 1px 4px; background: var(--sunk); }
+.node rect { fill: var(--panel); stroke-width: 1.5; }
+.node.sel rect { stroke-width: 2.5; }
+.node text { font: 600 11px var(--mono); fill: var(--ink); pointer-events: none; }
+.node text.meta { font: 400 9.5px var(--sans); fill: var(--dim); }
+.node { cursor: grab; }
+.node.dragging { cursor: grabbing; }
+.edge { fill: none; stroke: var(--dim); stroke-width: 1.4; opacity: .75; }
+.edge.hi { stroke: var(--accent); stroke-width: 2.4; opacity: 1; }
+.edge-label { font: 500 9px var(--mono); fill: var(--dim); pointer-events: none; }
+#toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+  background: var(--ink); color: var(--bg); padding: 9px 15px; border-radius: var(--r);
+  font-size: 12px; opacity: 0; transition: opacity .18s; pointer-events: none; }
+#toast.on { opacity: 1; }
+</style>
+
+<header>
+  <h1><a href="/?t=__TOKEN__">creds</a>/landscape</h1>
+  <select id="view" aria-label="Diagram"></select>
+  <select id="cust" aria-label="Customer filter"></select>
+  <span class="grow"></span>
+  <span id="stats" class="sub" style="margin:0"></span>
+  <button id="link" title="Draw an edge: click a source node, then a target">↝ Link</button>
+  <button id="tidy" title="Re-run the automatic tier layout">Tidy</button>
+  <button id="fit">Fit</button>
+  <button id="theme" title="Toggle theme">◐</button>
+  <button id="save" class="primary" disabled>Save</button>
+</header>
+
+<main>
+  <div id="wrap">
+    <svg id="cv">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6"
+                markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--dim)"></path>
+        </marker>
+        <marker id="arrow-hi" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6"
+                markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"></path>
+        </marker>
+      </defs>
+      <g id="cam">
+        <g id="edges"></g>
+        <g id="nodes"></g>
+      </g>
+    </svg>
+  </div>
+  <aside id="side"><p class="empty">Click a node or an edge.</p></aside>
+</main>
+<div id="toast" role="status"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const TOKEN = "__TOKEN__";
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const NODE_TYPES = ["client", "network", "saprouter", "bastion", "webdisp",
+                    "appserver", "db", "device", "cloud", "other"];
+const EDGE_TYPES = ["network", "disp", "gateway", "msgserver", "rfc", "jdbc",
+                    "ssh", "http", "transport", "replication", "other"];
+const ENVS = ["dev", "tst", "qas", "sbx", "trn", "prd", "all"];
+
+// Left-to-right tiers. Edges are drawn in the direction you connect, so putting the
+// client at the left and the database at the right makes the arrows read as flow.
+const TIER = { client: 0, device: 0, network: 1, saprouter: 1, bastion: 1, cloud: 1,
+               webdisp: 2, appserver: 3, db: 4, other: 2 };
+const W = 168, H = 46, COL = 250, ROW = 74;
+
+let idx = null, sel = null, dirty = false, view = "physical", cust = "";
+let cam = { x: 60, y: 40, k: 1 };
+let linkFrom = null;
+
+const nodes = () => idx.nodes || (idx.nodes = []);
+const edges = () => idx.edges || (idx.edges = []);
+const shown = () => nodes().filter(n => !cust || (n.customer || "") === cust);
+const nodeById = id => nodes().find(n => n.id === id);
+
+function toast(m) { const t = $("#toast"); t.textContent = m; t.classList.add("on");
+  setTimeout(() => t.classList.remove("on"), 2200); }
+function setDirty(v) { dirty = v; $("#save").disabled = !v;
+  $("#stats").textContent = `${shown().length} node(s) · ${visibleEdges().length} edge(s)${v ? " · unsaved" : ""}`; }
+
+async function api(path, opts = {}) {
+  const r = await fetch(path + (path.includes("?") ? "&" : "?") + "t=" + TOKEN,
+    { headers: { "content-type": "application/json" }, ...opts });
+  const body = await r.json();
+  if (!r.ok) throw new Error(body.error || r.statusText);
+  return body;
+}
+
+/* ---------- positions ---------- */
+// Nodes seeded from the CLI have no coordinates. Rather than pile them all at the
+// origin, lay them out by tier on first sight; the position is only persisted once
+// the user actually saves.
+function pos(n) {
+  const p = (n.pos || {})[view];
+  return Array.isArray(p) ? { x: p[0], y: p[1] } : null;
+}
+function setPos(n, x, y) {
+  n.pos = n.pos || {};
+  n.pos[view] = [Math.round(x), Math.round(y)];
+}
+function autoLayout(force) {
+  const lanes = {};
+  for (const n of shown()) {
+    if (!force && pos(n)) continue;
+    const t = TIER[n.type] ?? 2;
+    lanes[t] = lanes[t] || 0;
+    setPos(n, t * COL, lanes[t] * ROW);
+    lanes[t]++;
+  }
+}
+
+/* ---------- rendering ---------- */
+function visibleEdges() {
+  const ids = new Set(shown().map(n => n.id));
+  return edges().filter(e => ids.has(e.from) && ids.has(e.to));
+}
+
+// Several edges can join the same pair (a box with a dispatcher, a gateway and SSH).
+// Bow them apart by index so they do not draw on top of each other.
+function edgePath(e, i, total) {
+  const a = pos(nodeById(e.from)), b = pos(nodeById(e.to));
+  if (!a || !b) return "";
+  const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x, y2 = b.y + H / 2;
+  const spread = (i - (total - 1) / 2) * 26;
+  const mx = (x1 + x2) / 2;
+  return `M${x1},${y1} C${mx},${y1 + spread} ${mx},${y2 + spread} ${x2},${y2}`;
+}
+
+function draw() {
+  autoLayout(false);
+  $("#cam").setAttribute("transform", `translate(${cam.x},${cam.y}) scale(${cam.k})`);
+
+  const groups = {};
+  visibleEdges().forEach(e => {
+    const k = e.from + " " + e.to;
+    (groups[k] = groups[k] || []).push(e);
+  });
+
+  let eh = "";
+  for (const list of Object.values(groups)) {
+    list.forEach((e, i) => {
+      const d = edgePath(e, i, list.length);
+      if (!d) return;
+      const on = sel && sel.kind === "edge" && sel.ref === e;
+      const label = e.type + (e.port ? ":" + e.port : "");
+      eh += `<path class="edge${on ? " hi" : ""}" d="${d}" data-e="${edges().indexOf(e)}"
+              marker-end="url(#arrow${on ? "-hi" : ""})" style="pointer-events:stroke;cursor:pointer"></path>
+`;
+      // Label at the midpoint of the bow -- simpler and more legible than a textPath.
+      const a = pos(nodeById(e.from)), b = pos(nodeById(e.to));
+      const spread = (i - (list.length - 1) / 2) * 26;
+      eh += `<text class="edge-label" text-anchor="middle"
+               x="${(a.x + W + b.x) / 2}" y="${(a.y + b.y) / 2 + H / 2 + spread * 0.75 - 4}"
+               >${esc(label)}</text>`;
+    });
+  }
+  $("#edges").innerHTML = eh;
+  $("#edges").querySelectorAll("path.edge").forEach(p => {
+    p.onclick = ev => { ev.stopPropagation(); select("edge", edges()[+p.dataset.e]); };
+  });
+
+  $("#nodes").innerHTML = shown().map(n => {
+    const p = pos(n), on = sel && sel.kind === "node" && sel.ref === n;
+    const col = `var(--n-${["client","network","saprouter","appserver","db"].includes(n.type) ? n.type : "other"})`;
+    const f = n.attrs || {};
+    const meta = [n.env, f.sid || f.host || n.type].filter(Boolean).join(" · ");
+    const nc = (n.creds || []).length;
+    return `<g class="node${on ? " sel" : ""}" data-id="${esc(n.id)}" transform="translate(${p.x},${p.y})">
+      <rect width="${W}" height="${H}" rx="8" stroke="${col}"></rect>
+      <rect width="4" height="${H}" rx="2" fill="${col}" stroke="none"></rect>
+      <text x="12" y="19">${esc((n.label || n.id).slice(0, 22))}</text>
+      <text x="12" y="34" class="meta">${esc(meta.slice(0, 26))}${nc ? ` · ${nc}🔑` : ""}</text>
+    </g>`;
+  }).join("");
+  wireNodes();
+  setDirty(dirty);
+}
+
+/* ---------- interaction ---------- */
+function wireNodes() {
+  $("#nodes").querySelectorAll(".node").forEach(g => {
+    const n = nodeById(g.dataset.id);
+    g.onpointerdown = ev => {
+      ev.stopPropagation();
+      if (linkFrom !== null) return;              // link mode handles its own clicks
+      const start = pos(n), sx = ev.clientX, sy = ev.clientY;
+      let moved = false;
+      g.setPointerCapture(ev.pointerId);
+      g.classList.add("dragging");
+      g.onpointermove = m => {
+        const dx = (m.clientX - sx) / cam.k, dy = (m.clientY - sy) / cam.k;
+        if (!moved && Math.hypot(dx, dy) < 3) return;   // a click must not count as a drag
+        moved = true;
+        setPos(n, start.x + dx, start.y + dy);
+        g.setAttribute("transform", `translate(${pos(n).x},${pos(n).y})`);
+        drawEdgesOnly();
+      };
+      g.onpointerup = () => {
+        g.onpointermove = g.onpointerup = null;
+        g.classList.remove("dragging");
+        if (moved) { setDirty(true); } else { select("node", n); }
+      };
+    };
+    g.onclick = ev => {
+      if (linkFrom === null) return;
+      ev.stopPropagation();
+      if (linkFrom === n) { linkFrom = null; $("#link").classList.remove("on"); return; }
+      if (linkFrom) {
+        edges().push({ from: linkFrom.id, to: n.id, type: "network" });
+        const e = edges()[edges().length - 1];
+        linkFrom = null; $("#link").classList.remove("on");
+        setDirty(true); select("edge", e); draw();
+      } else {
+        linkFrom = n; toast(`linking from ${n.id} — click the target`);
+      }
+    };
+  });
+}
+function drawEdgesOnly() {
+  const groups = {};
+  visibleEdges().forEach(e => {
+    const k = e.from + " " + e.to;
+    (groups[k] = groups[k] || []).push(e);
+  });
+  const paths = $("#edges").querySelectorAll("path.edge");
+  let i = 0;
+  for (const list of Object.values(groups))
+    list.forEach((e, j) => { if (paths[i]) paths[i].setAttribute("d", edgePath(e, j, list.length)); i++; });
+}
+
+function select(kind, ref) { sel = { kind, ref }; draw(); side(); }
+
+/* ---------- side panel ---------- */
+function side() {
+  const box = $("#side");
+  if (!sel) { box.innerHTML = `<p class="empty">Click a node or an edge.</p>`; return; }
+
+  if (sel.kind === "node") {
+    const n = sel.ref, f = n.attrs || {};
+    box.innerHTML = `
+      <h2>${esc(n.id)}</h2>
+      <p class="sub">${esc(n.type || "node")}${n.customer ? " · " + esc(n.customer) : ""}</p>
+      <fieldset><legend>Node</legend><div class="grid">
+        <label>label</label><input id="n-label" value="${esc(n.label ?? "")}">
+        <label>type</label><select id="n-type">${NODE_TYPES.map(t =>
+          `<option${t === n.type ? " selected" : ""}>${t}</option>`).join("")}</select>
+        <label>env</label><select id="n-env">${["", ...ENVS].map(t =>
+          `<option${t === (n.env || "") ? " selected" : ""}>${t}</option>`).join("")}</select>
+        <label>customer</label><input id="n-customer" value="${esc(n.customer ?? "")}">
+      </div></fieldset>
+      <fieldset><legend>Credentials on this node</legend>
+        <div id="creds">${(n.creds || []).map(c =>
+          `<span class="pill">${esc(c)}<button data-c="${esc(c)}" title="Detach">×</button></span>`).join("")
+          || `<span class="sub">none attached</span>`}</div>
+        <input id="addcred" list="entrylist" placeholder="attach an entry id…" style="width:100%;margin-top:8px">
+        <datalist id="entrylist">${(idx.entries || [])
+          .filter(e => !n.customer || e.customer === n.customer)
+          .map(e => `<option value="${esc(e.id)}">`).join("")}</datalist>
+      </fieldset>
+      <fieldset><legend>Attributes</legend><div class="grid" id="attrs">
+        ${Object.entries(f).map(([k, v], i) =>
+          `<label title="${esc(k)}">${esc(k.slice(0, 11))}</label>
+           <input data-i="${i}" data-k="${esc(k)}" value="${esc(v)}">`).join("")
+          || `<span class="sub" style="grid-column:1/-1">none</span>`}
+      </div></fieldset>
+      <button id="ndel" style="color:var(--bad)">Delete node</button>
+      <p class="hint">Deleting a node also removes every edge touching it.</p>`;
+
+    $("#n-label").oninput = e => { n.label = e.target.value; setDirty(true); draw(); };
+    $("#n-type").onchange = e => { n.type = e.target.value; setDirty(true); draw(); };
+    $("#n-env").onchange = e => { n.env = e.target.value || undefined; setDirty(true); draw(); };
+    $("#n-customer").oninput = e => { n.customer = e.target.value; setDirty(true); draw(); };
+    box.querySelectorAll("#attrs input").forEach(inp => inp.oninput = () => {
+      n.attrs[inp.dataset.k] = inp.value; setDirty(true);
+    });
+    box.querySelectorAll("#creds button").forEach(b => b.onclick = () => {
+      n.creds = (n.creds || []).filter(c => c !== b.dataset.c); setDirty(true); side(); draw();
+    });
+    $("#addcred").onchange = ev => {
+      const v = ev.target.value.trim();
+      if (!v) return;
+      // A ref that matches no entry is refused at save time, so refuse it here where
+      // the mistake is still one keystroke old.
+      if (!(idx.entries || []).some(e => e.id === v)) { toast(`no entry "${v}"`); return; }
+      n.creds = [...new Set([...(n.creds || []), v])];
+      setDirty(true); side(); draw();
+    };
+    $("#ndel").onclick = () => {
+      if (!confirm(`Delete node "${n.id}" and its edges? Takes effect on Save.`)) return;
+      idx.edges = edges().filter(e => e.from !== n.id && e.to !== n.id);
+      idx.nodes = nodes().filter(x => x !== n);
+      sel = null; setDirty(true); draw(); side();
+    };
+    return;
+  }
+
+  const e = sel.ref;
+  box.innerHTML = `
+    <h2>${esc(e.from)} → ${esc(e.to)}</h2>
+    <p class="sub">edge</p>
+    <fieldset><legend>Hop</legend><div class="grid">
+      <label>type</label><select id="e-type">${EDGE_TYPES.map(t =>
+        `<option${t === e.type ? " selected" : ""}>${t}</option>`).join("")}</select>
+      <label>port</label><input id="e-port" value="${esc(e.port ?? "")}">
+      <label>note</label><input id="e-note" value="${esc(e.note ?? "")}">
+    </div></fieldset>
+    <fieldset><legend>Requires — collected along a path</legend>
+      <div id="ereq">${(e.requires || []).map(r =>
+        `<span class="pill">${esc(r)}<button data-r="${esc(r)}">×</button></span>`).join("")
+        || `<span class="sub">none</span>`}</div>
+      <input id="addreq" placeholder="vpn:…, an entry id, internet" style="width:100%;margin-top:8px">
+    </fieldset>
+    <fieldset><legend>Access window</legend><div class="grid">
+      <label>days</label><input id="w-days" value="${esc((e.window || {}).days ?? "")}" placeholder="mon-fri">
+      <label>hours</label><input id="w-hours" value="${esc((e.window || {}).hours ?? "")}" placeholder="08:00-18:00">
+      <label>tz</label><input id="w-tz" value="${esc((e.window || {}).tz ?? "")}" placeholder="Asia/Kuala_Lumpur">
+    </div>
+    <p class="hint">Leave blank for always open. <code>creds path</code> warns outside the window.</p></fieldset>
+    <button id="eflip">Reverse direction</button>
+    <button id="edel" style="color:var(--bad)">Delete edge</button>
+    <p class="hint">Edges are directed: the hostname on a hop is resolved from that
+    hop's own side, which is why a router→server edge carries the internal name.</p>`;
+
+  $("#e-type").onchange = ev => { e.type = ev.target.value; setDirty(true); draw(); };
+  $("#e-port").oninput = ev => {
+    const v = ev.target.value.trim();
+    e.port = v === "" ? undefined : (/^\d+$/.test(v) ? +v : v);
+    setDirty(true); draw();
+  };
+  $("#e-note").oninput = ev => { e.note = ev.target.value; setDirty(true); };
+  ["days", "hours", "tz"].forEach(k => {
+    $(`#w-${k}`).oninput = ev => {
+      e.window = e.window || {};
+      if (ev.target.value.trim()) e.window[k] = ev.target.value.trim(); else delete e.window[k];
+      if (!Object.keys(e.window).length) delete e.window;
+      setDirty(true);
+    };
+  });
+  box.querySelectorAll("#ereq button").forEach(b => b.onclick = () => {
+    e.requires = (e.requires || []).filter(r => r !== b.dataset.r); setDirty(true); side();
+  });
+  $("#addreq").onchange = ev => {
+    const v = ev.target.value.trim();
+    if (!v) return;
+    e.requires = [...new Set([...(e.requires || []), v])];
+    setDirty(true); side();
+  };
+  $("#eflip").onclick = () => { [e.from, e.to] = [e.to, e.from]; setDirty(true); draw(); side(); };
+  $("#edel").onclick = () => {
+    idx.edges = edges().filter(x => x !== e); sel = null; setDirty(true); draw(); side();
+  };
+}
+
+/* ---------- camera ---------- */
+const wrap = $("#wrap");
+wrap.addEventListener("wheel", ev => {
+  ev.preventDefault();
+  const r = wrap.getBoundingClientRect();
+  const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+  const k = Math.min(2.5, Math.max(0.2, cam.k * (ev.deltaY < 0 ? 1.1 : 1 / 1.1)));
+  // Zoom about the pointer, so the thing under the cursor stays put.
+  cam.x = mx - (mx - cam.x) * (k / cam.k);
+  cam.y = my - (my - cam.y) * (k / cam.k);
+  cam.k = k;
+  $("#cam").setAttribute("transform", `translate(${cam.x},${cam.y}) scale(${cam.k})`);
+}, { passive: false });
+
+wrap.onpointerdown = ev => {
+  if (ev.target.closest(".node")) return;
+  if (linkFrom !== null) { linkFrom = null; $("#link").classList.remove("on"); }
+  else if (ev.target.tagName !== "path") { sel = null; draw(); side(); }
+  const sx = ev.clientX - cam.x, sy = ev.clientY - cam.y;
+  wrap.setPointerCapture(ev.pointerId);
+  wrap.onpointermove = m => {
+    cam.x = m.clientX - sx; cam.y = m.clientY - sy;
+    $("#cam").setAttribute("transform", `translate(${cam.x},${cam.y}) scale(${cam.k})`);
+  };
+  wrap.onpointerup = () => { wrap.onpointermove = wrap.onpointerup = null; };
+};
+
+function fit() {
+  const list = shown().map(pos).filter(Boolean);
+  if (!list.length) return;
+  const r = wrap.getBoundingClientRect();
+  // Called before the grid has laid out, the rect is a few pixels tall and every
+  // derived scale clamps to the minimum. Wait for a real box rather than zoom to 0.2.
+  if (r.width < 200 || r.height < 200) { requestAnimationFrame(fit); return; }
+  const x1 = Math.min(...list.map(p => p.x)), x2 = Math.max(...list.map(p => p.x)) + W;
+  const y1 = Math.min(...list.map(p => p.y)), y2 = Math.max(...list.map(p => p.y)) + H;
+  cam.k = Math.min(1.4, Math.max(0.2, Math.min((r.width - 80) / (x2 - x1), (r.height - 80) / (y2 - y1))));
+  cam.x = (r.width - (x2 - x1) * cam.k) / 2 - x1 * cam.k;
+  cam.y = (r.height - (y2 - y1) * cam.k) / 2 - y1 * cam.k;
+  draw();
+}
+
+/* ---------- chrome ---------- */
+$("#link").onclick = () => {
+  linkFrom = linkFrom === null ? false : null;   // false = armed, waiting for a source
+  $("#link").classList.toggle("on", linkFrom === false);
+  toast(linkFrom === false ? "click the source node, then the target" : "link cancelled");
+};
+$("#tidy").onclick = () => { autoLayout(true); setDirty(true); fit(); };
+$("#fit").onclick = fit;
+$("#theme").onclick = () => {
+  const cur = document.documentElement.dataset.theme
+    || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  document.documentElement.dataset.theme = cur === "dark" ? "light" : "dark";
+};
+$("#view").onchange = ev => { view = ev.target.value; sel = null; draw(); side(); fit(); };
+$("#cust").onchange = ev => { cust = ev.target.value; sel = null; draw(); side(); fit(); };
+$("#save").onclick = async () => {
+  try {
+    const r = await api("/api/index", { method: "POST", body: JSON.stringify(idx) });
+    setDirty(false);
+    toast(`saved — ${r.count} entries re-encrypted`);
+  } catch (err) { toast("NOT saved: " + err.message); }
+};
+addEventListener("keydown", ev => {
+  if (ev.key === "Escape") { linkFrom = null; $("#link").classList.remove("on"); sel = null; draw(); side(); }
+  if ((ev.metaKey || ev.ctrlKey) && ev.key === "s") { ev.preventDefault(); $("#save").click(); }
+});
+addEventListener("beforeunload", ev => { if (dirty) { ev.preventDefault(); ev.returnValue = ""; } });
+
+(async function init() {
+  try { idx = await api("/api/index"); }
+  catch (err) { $("#side").innerHTML = `<p class="empty">could not load: ${esc(err.message)}</p>`; return; }
+
+  const views = (idx.views && idx.views.length ? idx.views
+    : [{ id: "physical", name: "Physical" }, { id: "logical", name: "Logical" }]);
+  view = views[0].id;
+  $("#view").innerHTML = views.map(v => `<option value="${esc(v.id)}">${esc(v.name || v.id)}</option>`).join("");
+
+  const customers = [...new Set(nodes().map(n => n.customer).filter(Boolean))].sort();
+  $("#cust").innerHTML = `<option value="">all customers</option>` +
+    customers.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+
+  draw();
+  requestAnimationFrame(fit);
+})();
+</script>

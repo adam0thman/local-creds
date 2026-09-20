@@ -1,0 +1,495 @@
+#!/bin/sh
+# Local credentials index. Encrypted at rest with age; plaintext only in memory.
+#   creds find <words>...           search customer/SID/host/IP/user; suggests on near-miss
+#   creds path <from> <to>          route through the landscape graph + its prerequisites
+#   creds lint [--customer x] [-a]  check ids/env/logins against the naming convention
+#   creds migrate --customer x      propose convention ids + rfc/sapgui merges (--apply)
+#   creds exec <id> -- <cmd>...     run cmd with CREDS_* env injected
+#   creds copy <id>                 password -> clipboard, never displayed
+#   creds rfc <id>                  real SAP RFC logon test via JCo
+#   creds pwcheck <id> [user]       SAP account state + password expiry
+#   creds edit                      decrypt -> $EDITOR -> re-encrypt
+#   creds ui                        local-only web editor (127.0.0.1, token-gated)
+#   creds sync-ssh                  regenerate ~/.ssh/config.d/local-creds
+#   creds doctor                    check key, recipients, schema, backups, tooling
+#   creds restore [snapshot]        list or roll back to a pre-save snapshot
+set -eu
+
+# $DIR is the DATA directory (index, backups). $SELF is where the code lives.
+# They coincide in the default install -- ~/.local-creds symlinks to the checkout --
+# but must not be assumed equal: the test harness points DIR at a throwaway index,
+# and LOCAL_CREDS_DIR can point anywhere. $0 may itself be a symlink (~/.local/bin/creds),
+# and dirname does not follow those, so resolve the chain before taking the directory.
+SELF=$0
+while [ -L "$SELF" ]; do
+  link=$(readlink "$SELF")
+  case $link in /*) SELF=$link ;; *) SELF=$(dirname "$SELF")/$link ;; esac
+done
+SELF=$(cd "$(dirname "$SELF")" && pwd)
+
+DIR="${LOCAL_CREDS_DIR:-$HOME/.local-creds}"
+ENC="$DIR/creds.age"
+KEY="${LOCAL_CREDS_KEY:-$HOME/.config/age/local-creds.key}"
+RCP="$DIR/recipients.txt"
+
+BACKUPS="$DIR/.backups"
+KEEP_BACKUPS=15
+
+die() { echo "creds: $*" >&2; exit 1; }
+decrypt() { age -d -i "$KEY" "$ENC" 2>/dev/null || die "cannot decrypt $ENC"; }
+
+# Every write is preceded by a snapshot of the CURRENT ciphertext. Cheap (a copy
+# of a ~30KB file) and it is the only thing standing between a bad merge and
+# losing the whole index.
+snapshot() {
+  [ -f "$ENC" ] || return 0
+  mkdir -p "$BACKUPS"
+  cp "$ENC" "$BACKUPS/creds-$(date +%Y%m%d-%H%M%S).age"
+  # prune oldest beyond KEEP_BACKUPS
+  ls -1t "$BACKUPS"/creds-*.age 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)) \
+    | while IFS= read -r old; do rm -f "$old"; done
+}
+
+# Structural check on the plaintext index before it is ever encrypted back.
+# Catches the failure mode that matters: a renamed/dropped key silently blanking
+# a password, which valid-JSON parsing alone will happily accept.
+validate() {
+  f=$1
+  jq -e 'type == "object" and (.entries | type == "array")' "$f" >/dev/null 2>&1 \
+    || { echo "not a {entries: []} object"; return 1; }
+  bad=$(jq -r '
+    [ .entries[]
+      | select((.id | type) != "string" or (.id | length) == 0)
+      | (.host // "?") ] | join(", ")' "$f")
+  [ -z "$bad" ] || { echo "entries with a missing/empty id (hosts: $bad)"; return 1; }
+  dup=$(jq -r '[.entries[].id] | group_by(.) | map(select(length>1) | .[0]) | join(", ")' "$f")
+  [ -z "$dup" ] || { echo "duplicate ids: $dup"; return 1; }
+  unknown=$(jq -r '
+    ["id","customer","env","kind","host","port","user","secret","via","tags",
+     "requires","protocols","fields","logins"] as $known
+    | [ .entries[] | . as $e | (keys_unsorted[] | select(. as $k | $known | index($k) | not))
+        | "\($e.id):\(.)" ] | unique | join(", ")' "$f")
+  [ -z "$unknown" ] || echo "WARNING unrecognised keys: $unknown" >&2
+  badlogin=$(jq -r '
+    [ .entries[] | select(.logins != null) | . as $e
+      | (if (.logins|type) != "array" then "\($e.id):not-an-array"
+         else (.logins | to_entries[] | select((.value.user // "") == "")
+               | "\($e.id)[\(.key)]") end) ] | join(", ")' "$f")
+  [ -z "$badlogin" ] || { echo "logins with no user: $badlogin"; return 1; }
+  # Landscape graph, when present: dangling edges and creds refs that point at no
+  # entry are exactly the drift this is meant to prevent, so they block the save.
+  if ! gmsg=$("$(creds_python)" "$SELF/graph.py" check < "$f" 2>&1); then
+    echo "graph: $(printf '%s' "$gmsg" | head -3 | tr '\n' ';')"; return 1
+  fi
+  [ -z "$gmsg" ] || printf '%s\n' "$gmsg" >&2
+  return 0
+}
+
+# Entry as JSON, by exact id.
+entry() {
+  decrypt | jq -e --arg i "$1" 'first(.entries[] | select(.id == $i))' \
+    || die "no entry '$1' (try: creds find $1)"
+}
+
+# secret field -> plaintext. Inline by default; b64:/keychain: URIs resolved.
+# NOTE: b64 is encoding, not encryption -- it hides nothing on its own. The real
+# protection is that the whole index is age-encrypted at rest.
+resolve_secret() {
+  case "$1" in
+    keychain:*) security find-generic-password -s local-creds -a "${1#keychain:}" -w ;;
+    b64:*)      printf '%s' "${1#b64:}" | base64 -d ;;
+    "")         echo "" ;;
+    *)          printf '%s' "$1" ;;
+  esac
+}
+
+# One ABAP system is one system whether you reach it over the dispatcher or the
+# gateway -- SAP GUI and RFC share the same (client, user, password). `logins[]`
+# holds them all on the entry. An entry WITHOUT logins[] is treated as a single
+# login built from the flat user/secret/fields.client, so nothing has to migrate.
+# $2 = user filter, $3 = client filter; both "" mean "no preference".
+pick_login() {
+  printf '%s' "$1" | jq -c --arg u "${2:-}" --arg c "${3:-}" '
+    . as $e
+    | (if (($e.logins // []) | length) > 0 then $e.logins
+       else [{client: (($e.fields.client // "") | tostring),
+              user: ($e.user // ""), secret: ($e.secret // "")}] end) as $all
+    | ($all | map(select(($u == "" or .user == $u)
+                     and ($c == "" or ((.client // "") | tostring) == $c)))) as $m
+    | if ($m | length) == 0 then null
+      else ((($m | map(select(.default == true))) + $m) | .[0]) end'
+}
+
+# $1 = all|any. "all" narrows (AND); "any" is the near-miss suggestion pass (OR).
+search() {
+  jq --arg q "$2" --arg mode "$1" '
+    def redact: if type == "string" then gsub("/W/[^/]*"; "/W/***") else . end;
+    [ .entries[]
+      | . as $e
+      | ([$e.id, $e.customer, $e.env, $e.kind, $e.host, ($e.port // "" | tostring),
+          ($e.user // ""), (($e.tags // []) | join(" ")),
+          (($e.logins // []) | map("\(.user // "") \(.client // "")") | join(" ")),
+          (($e.requires // []) | join(" ")), ($e.via // ""),
+          (($e.protocols // []) | map(.type) | join(" ")),
+          (($e.fields // {}) | to_entries | map(.value | tostring) | join(" "))]
+         | join(" ") | ascii_downcase) as $hay
+      | select( ($q | split(" ") | map(select(length > 0))) as $w
+                | if $mode == "all"
+                  then ($w | all(. as $t | $hay | contains($t)))
+                  else ($w | any(. as $t | $hay | contains($t))) end )
+      | del(.secret)
+      | if .logins then .logins |= map(del(.secret)) else . end
+      # A SAProuter route string carries its password inline as /W/<pw>. It lives in
+      # `fields`, which is printed in full -- so without this, `creds find` puts a
+      # live credential into the terminal and the session transcript.
+      # `(.fields // {}) |= f` is NOT a valid jq path -- the // alternative makes the
+      # left side non-assignable ("Invalid path expression"). Guard on type instead.
+      | (if (.fields | type) == "object" then .fields |= with_entries(.value |= redact) else . end)
+      | (if (.requires | type) == "array" then .requires |= map(redact) else . end)
+      | .via |= redact
+      | .host |= redact ]'
+}
+
+# Optional extras (hdbcli for HANA logon tests, msoffcrypto for encrypted xlsx) live in a
+# per-machine venv, deliberately outside Dropbox: venvs hold compiled wheels that do not
+# travel between machines. Falls back to plain python3 when it is absent.
+creds_python() {
+  for c in ${CREDS_PYTHON:+"$CREDS_PYTHON"} "$HOME/.cache/creds/venv/bin/python" python3; do
+    if command -v "$c" >/dev/null 2>&1 || [ -x "$c" ]; then printf '%s' "$c"; return 0; fi
+  done
+  printf 'python3'
+}
+
+cmd_find() {
+  [ $# -gt 0 ] || set -- ""
+  q=$(printf '%s ' "$@" | tr '[:upper:]' '[:lower:]')
+  data=$(decrypt)
+  res=$(printf '%s' "$data" | search all "$q")
+  n=$(printf '%s' "$res" | jq 'length')
+  if [ "$n" -eq 0 ] && [ -n "$(printf '%s' "$q" | tr -d ' ')" ]; then
+    alt=$(printf '%s' "$data" | search any "$q")
+    if [ "$(printf '%s' "$alt" | jq 'length')" -gt 0 ]; then
+      echo "creds: nothing matches all of '$*' -- closest matches:" >&2
+      res=$alt
+    else
+      echo "creds: no match for '$*'. Known customers:" >&2
+      printf '%s' "$data" | jq -r '[.entries[].customer|select(.!="")]|unique|join(", ")' >&2
+    fi
+  fi
+  printf '%s\n' "$res"
+}
+
+# Read-only and secret-free: prints node ids, edge types and entry ids, never a
+# password. No prod guard needed -- it connects to nothing, it only reads the map.
+cmd_path() {
+  [ $# -ge 2 ] || die "usage: creds path <from> <to> [--json]"
+  decrypt | "$(creds_python)" "$SELF/graph.py" path "$@"
+}
+
+# Read-only and secret-free: reports ids, users and clients, never a password.
+cmd_lint() {
+  decrypt | "$(creds_python)" "$SELF/lint.py" "$@"
+}
+
+# Dry-run reads a decrypted copy on stdin. --apply routes through cmd_edit so the
+# change gets the same snapshot + validation as any other write.
+cmd_migrate() {
+  case " $* " in
+    *" --apply "*) EDITOR="$(creds_python) $SELF/migrate.py $*" cmd_edit ;;
+    *)             decrypt | "$(creds_python)" "$SELF/migrate.py" "$@" ;;
+  esac
+}
+
+cmd_copy() {
+  as_user=""; as_client=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --as)     as_user=${2:-};   shift 2 || die "--as needs a user" ;;
+      --client) as_client=${2:-}; shift 2 || die "--client needs a client" ;;
+      *) break ;;
+    esac
+  done
+  [ $# -ge 1 ] || die "usage: creds copy [--as <user>] [--client <nnn>] <id>"
+  e=$(entry "$1")
+  login=$(pick_login "$e" "$as_user" "$as_client")
+  [ "$login" != "null" ] || die "'$1' has no login matching that user/client"
+  pw=$(resolve_secret "$(printf '%s' "$login" | jq -r '.secret // ""')" | tr -d '\n')
+  [ -n "$pw" ] || die "'$1' has no stored password"
+  printf '%s' "$pw" | pbcopy
+  secs=${CREDS_CLIP_SECONDS:-45}
+  # Clear it again, but only if it is still ours -- otherwise we would wipe
+  # whatever the user copied in the meantime.
+  ( sleep "$secs"
+    if [ "$(pbpaste)" = "$pw" ]; then printf '' | pbcopy; fi ) >/dev/null 2>&1 &
+  echo "password for '$1' copied to clipboard (not displayed); clears in ${secs}s"
+}
+
+cmd_doctor() {
+  rc=0
+  say() { printf '  %-4s %s\n' "$1" "$2"; [ "$1" = "FAIL" ] && rc=1; return 0; }
+  echo "creds doctor"
+
+  [ -r "$KEY" ] && say ok "identity readable: $KEY" || say FAIL "identity missing/unreadable: $KEY"
+  if [ -s "$RCP" ] && grep -q '^age1' "$RCP"; then
+    say ok "recipients: $(grep -c '^age1' "$RCP") public key(s)"
+  else
+    say FAIL "recipients.txt missing or has no age1... keys ($RCP)"
+  fi
+
+  if plain=$(age -d -i "$KEY" "$ENC" 2>/dev/null); then
+    say ok "index decrypts ($(printf '%s' "$plain" | jq '.entries|length') entries)"
+    tmp=$(mktemp); printf '%s' "$plain" > "$tmp"
+    if msg=$(validate "$tmp"); then say ok "schema valid"; else say FAIL "schema: $msg"; fi
+    say info "$(printf '%s' "$plain" | jq '[.entries[]|select((.secret//"")=="")]|length') entr(ies) with no password"
+    say info "$(printf '%s' "$plain" | jq '[.entries[]|select(.env=="prd")]|length') production entr(ies) (guarded)"
+    say info "$(printf '%s' "$plain" | jq '(.nodes//[])|length') landscape node(s), $(printf '%s' "$plain" | jq '(.edges//[])|length') edge(s)"
+    rm -f "$tmp"
+  else
+    say FAIL "cannot decrypt $ENC with $KEY"
+  fi
+
+  n=$(ls -1 "$BACKUPS"/creds-*.age 2>/dev/null | wc -l | tr -d ' ')
+  [ "${n:-0}" -gt 0 ] && say ok "$n backup snapshot(s) in $BACKUPS" \
+                      || say info "no backups yet (created on first save)"
+
+  if lib=$(find_jco_lib); then say ok "JCo lib: $lib"; else say info "no readable sapjco3.jar (creds rfc unavailable)"; fi
+  command -v xfreerdp >/dev/null && say ok "xfreerdp $(xfreerdp --version 2>/dev/null | head -1)" \
+    || say info "no xfreerdp (RDP logon tests unavailable) - brew install freerdp"
+  command -v age >/dev/null && say ok "age $(age --version 2>/dev/null)" || say FAIL "age not installed"
+  py=$(creds_python)
+  if "$py" -c 'import hdbcli' 2>/dev/null; then
+    say ok "python extras: hdbcli present ($py)"
+  else
+    say info "no hdbcli - HANA logon tests unavailable ($py)"
+  fi
+  grep -q 'config.d/local-creds' "$HOME/.ssh/config" 2>/dev/null \
+    && say ok "ssh config Include present" \
+    || say info "ssh Include missing - add 'Include config.d/local-creds' to ~/.ssh/config"
+  return $rc
+}
+
+cmd_restore() {
+  ls -1t "$BACKUPS"/creds-*.age >/dev/null 2>&1 || die "no backups in $BACKUPS"
+  if [ $# -eq 0 ]; then
+    echo "available snapshots (newest first):"
+    ls -1t "$BACKUPS"/creds-*.age | while IFS= read -r f; do
+      n=$(age -d -i "$KEY" "$f" 2>/dev/null | jq '.entries|length' 2>/dev/null || echo '?')
+      printf '  %-24s %s entries\n' "$(basename "$f")" "$n"
+    done
+    echo "restore with: creds restore <filename>"
+    return 0
+  fi
+  src="$BACKUPS/$1"
+  [ -f "$src" ] || die "no such snapshot: $1"
+  age -d -i "$KEY" "$src" >/dev/null 2>&1 || die "snapshot does not decrypt: $1"
+  snapshot                       # keep the current state too, before replacing it
+  cp "$src" "$ENC"
+  echo "restored $1 ($(decrypt | jq '.entries|length') entries)"
+}
+
+cmd_exec() {
+  as_user=""; as_client=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --as)     as_user=${2:-};   shift 2 || die "--as needs a user" ;;
+      --client) as_client=${2:-}; shift 2 || die "--client needs a client" ;;
+      *) break ;;
+    esac
+  done
+  [ $# -ge 2 ] || die "usage: creds exec [--as <user>] [--client <nnn>] <id> -- <command>..."
+  id=$1; shift
+  if [ "$1" = "--" ]; then shift; fi
+  [ $# -gt 0 ] || die "no command given"
+
+  e=$(entry "$id")
+
+  login=$(pick_login "$e" "$as_user" "$as_client")
+  [ "$login" != "null" ] || die "'$id' has no login matching${as_user:+ user $as_user}${as_client:+ client $as_client}.
+Available: $(printf '%s' "$e" | jq -r '
+    ((.logins // [{client:(.fields.client//""),user:(.user//"")}])
+     | map("\(.user)@\(.client // "-")") | join(", "))')"
+
+  # Prod guard. Deliberately requires an env-var prefix so the command no longer
+  # matches the "Bash(creds exec:*)" permission prefix and Claude Code must ask.
+  if [ "$(printf '%s' "$e" | jq -r '.env // ""')" = "prd" ] \
+     && [ "${CREDS_ALLOW_PROD:-}" != "1" ]; then
+    die "'$id' is PRODUCTION. Re-run the same command with CREDS_ALLOW_PROD=1 in front."
+  fi
+
+  # Connectivity prerequisites are advisory: printed, never auto-enforced. Detecting
+  # whether a VPN is actually up is environment-specific -- surface it, let the human judge.
+  reqs=$(printf '%s' "$e" | jq -r '(.requires // []) | join(", ")')
+  if [ -n "$reqs" ]; then
+    echo "creds: '$id' requires: $reqs" >&2
+  fi
+
+  # @sh quotes safely, so hosts/passwords with spaces or quotes survive eval.
+  eval "$(printf '%s' "$e" | jq -r '
+    "CREDS_ID=\(.id|@sh)",
+    "CREDS_HOST=\(.host // "" |tostring|@sh)",
+    "CREDS_PORT=\(.port // "" |tostring|@sh)",
+    "CREDS_USER=\(.user // "" |tostring|@sh)",
+    "CREDS_KIND=\(.kind // "" |@sh)",
+    "CREDS_ENV=\(.env // "" |@sh)",
+    "CREDS_CUSTOMER=\(.customer // "" |@sh)",
+    ((.fields // {}) | to_entries[]
+      | "CREDS_\(.key|ascii_upcase|gsub("[^A-Z0-9]";"_"))=\(.value|tostring|@sh)")
+  ' | sed 's/^/export /')"
+
+  # The chosen login wins over the entry's flat user and fields.client, which the
+  # block above may already have exported.
+  eval "$(printf '%s' "$login" | jq -r '
+    "CREDS_USER=\(.user // "" |tostring|@sh)",
+    "CREDS_CLIENT=\(.client // "" |tostring|@sh)"' | sed 's/^/export /')"
+
+  CREDS_PASSWORD=$(resolve_secret "$(printf '%s' "$login" | jq -r '.secret // ""')")
+  export CREDS_PASSWORD
+
+  # JCo/NCo want a destination file, not env vars. Write it 0600 in a private
+  # tmpdir and shred on exit — never in Dropbox, never in the transcript.
+  case "$(printf '%s' "$e" | jq -r '.kind')" in
+    rfc|jco|nco)
+      td=$(mktemp -d) || die "mktemp failed"
+      trap 'rm -rf "$td"' EXIT INT TERM
+      dest="$td/$id.jcoDestination"
+      umask 077
+      { printf 'jco.client.ashost=%s\n' "$CREDS_HOST"
+        printf 'jco.client.sysnr=%s\n'  "${CREDS_SYSNR:-}"
+        printf 'jco.client.client=%s\n' "${CREDS_CLIENT:-}"
+        printf 'jco.client.user=%s\n'   "$CREDS_USER"
+        printf 'jco.client.passwd=%s\n' "$CREDS_PASSWORD"
+        printf 'jco.client.lang=%s\n'   "${CREDS_LANG:-EN}"
+        if [ -n "${CREDS_ROUTER:-}" ]; then
+          printf 'jco.client.saprouter=%s\n' "$CREDS_ROUTER"
+        fi
+      } > "$dest"
+      export CREDS_JCO_DEST="$dest" CREDS_JCO_DIR="$td" CREDS_JCO_NAME="$id"
+      ;;
+  esac
+
+  # NOTE: no exec when a tmpdir exists -- exec replaces this shell and the EXIT
+  # trap never runs, leaving the cleartext destination file on disk.
+  if [ -n "${td:-}" ]; then
+    rc=0; "$@" || rc=$?
+    rm -rf "$td"; trap - EXIT
+    exit "$rc"
+  fi
+  exec "$@"
+}
+
+# Routed through cmd_exec so it inherits the prod guard and the env injection,
+# and so the password reaches Java through the environment rather than argv.
+# ~/Documents is TCC-protected on macOS, so a jar that exists there may still be
+# unreadable. Test an actual read rather than -f/-r, and fall back to other copies.
+find_jco_lib() {
+  # SAP JCo is licensed software and is NOT shipped with this repo. Drop sapjco3.jar
+  # and libsapjco3.dylib (or .so) into ./lib, or point CREDS_JCO_LIB at your copy.
+  for d in ${CREDS_JCO_LIB:+"$CREDS_JCO_LIB"} \
+           "$SELF/lib"; do
+    if dd if="$d/sapjco3.jar" of=/dev/null bs=1 count=1 >/dev/null 2>&1; then
+      printf '%s' "$d"; return 0
+    fi
+  done
+  return 1
+}
+
+cmd_rfc() {
+  [ $# -ge 1 ] || die "usage: creds rfc <id>"
+  lib=$(find_jco_lib) || die "no readable sapjco3.jar found (set CREDS_JCO_LIB). If it lives
+under ~/Documents, macOS may be denying access to this process."
+  id=$1
+  cmd_exec "$id" -- sh -c '
+    RFC_HOST=$CREDS_HOST RFC_SYSNR=${CREDS_SYSNR:-00} RFC_CLIENT=${CREDS_CLIENT:-} \
+    RFC_USER=$CREDS_USER RFC_PASSWD=$CREDS_PASSWORD RFC_LANG=${CREDS_LANG:-EN} \
+    RFC_ROUTER=${CREDS_ROUTER:-${CREDS_SAPROUTER:-}} RFC_GWSERV=${CREDS_GWSERV:-} RFC_GWHOST=${CREDS_GWHOST:-} \
+    exec java --enable-native-access=ALL-UNNAMED -cp "$1/sapjco3.jar" \
+         -Djava.library.path="$1" "$2"
+  ' sh "$lib" "$SELF/RfcProbe.java"
+}
+
+# Account state + password expiry for the entry's own SAP user. Same routing as
+# cmd_rfc, so it inherits the prod guard and env-based secret injection.
+cmd_pwcheck() {
+  [ $# -ge 1 ] || die "usage: creds pwcheck <id> [sap-user]"
+  lib=$(find_jco_lib) || die "no readable sapjco3.jar (set CREDS_JCO_LIB)"
+  id=$1; shift
+  who=${1:-}
+  cmd_exec "$id" -- sh -c '
+    RFC_HOST=$CREDS_HOST RFC_SYSNR=${CREDS_SYSNR:-00} RFC_CLIENT=${CREDS_CLIENT:-} \
+    RFC_USER=$CREDS_USER RFC_PASSWD=$CREDS_PASSWORD RFC_ROUTER=${CREDS_ROUTER:-} \
+    PWCHK_USER=${3:-$CREDS_USER} \
+    exec java --enable-native-access=ALL-UNNAMED -cp "$1/sapjco3.jar" \
+         -Djava.library.path="$1" "$2"
+  ' sh "$lib" "$SELF/PwCheck.java" "$who"
+}
+
+cmd_edit() {
+  td=$(mktemp -d) || die "mktemp failed"
+  trap 'rm -rf "$td"' EXIT INT TERM
+  umask 077
+  f="$td/creds.json"
+  if [ -f "$ENC" ]; then decrypt > "$f"; else echo '{"version":1,"entries":[]}' > "$f"; fi
+  # Unquoted on purpose: allows EDITOR to carry arguments ("code -w", "python3 x.py").
+  # shellcheck disable=SC2086
+  ${EDITOR:-vi} "$f"
+  jq -e . "$f" >/dev/null 2>&1 || die "invalid JSON, not saving"
+  msg=$(validate "$f") || die "refusing to save: $msg"
+  snapshot
+  age -R "$RCP" -o "$ENC.new" "$f" || die "encrypt failed"
+  mv "$ENC.new" "$ENC"
+  echo "saved: $(jq '.entries|length' "$f") entries"
+}
+
+# ssh's own ProxyJump does the tunnelling; we only generate config for it.
+cmd_sync_ssh() {
+  out="$HOME/.ssh/config.d/local-creds"
+  mkdir -p "$HOME/.ssh/config.d"
+  umask 077
+  tmp=$(mktemp) || die "mktemp failed"
+  trap 'rm -f "$tmp"' EXIT INT TERM
+  # In jq only null and false are falsy, so select(.user) PASSES on "" and emits a
+  # bare "User" with no argument -- which ssh rejects, taking the whole file with it.
+  # Every optional value is therefore tested against "" explicitly, not for truthiness.
+  { echo "# generated by creds sync-ssh -- do not edit"
+    decrypt | jq -r '
+      def present(f): (f // "" | tostring) != "";
+      .entries[] | select(present(.host))
+      | "Host \(.id)",
+        "  HostName \(.host)",
+        # Only ssh/sftp/rdp carry an OS-level login. An abap, hana, bo or api `user`
+        # is an application identity -- ssh CUST_ADMIN@host is simply the wrong user.
+        (select((.kind == "ssh" or .kind == "sftp" or .kind == "rdp")
+                and present(.user)) | "  User \(.user)"),
+        (select(.kind == "ssh" and present(.port)) | "  Port \(.port)"),
+        (select(present(.via))              | "  ProxyJump \(.via)"),
+        (select(present(.fields.identity))  | "  IdentityFile \(.fields.identity)"),
+        ""'
+  } > "$tmp"
+  # ssh is the only authority on whether this parses. Validate BEFORE the file lands:
+  # a bad generation here breaks every ssh on the machine, not just creds aliases.
+  if ! msg=$(ssh -F "$tmp" -G creds-syntax-check 2>&1 >/dev/null); then
+    printf '%s\n' "$msg" | head -5 >&2
+    die "generated config does not parse -- $out left unchanged"
+  fi
+  mv "$tmp" "$out"; trap - EXIT
+  echo "wrote $out ($(grep -c '^Host ' "$out") hosts)"
+  grep -q 'config.d/local-creds' "$HOME/.ssh/config" 2>/dev/null \
+    || echo "NOTE: add 'Include config.d/local-creds' to the TOP of ~/.ssh/config"
+}
+
+case "${1:-}" in
+  find)     shift; cmd_find "$@" ;;
+  path)     shift; cmd_path "$@" ;;
+  lint)     shift; cmd_lint "$@" ;;
+  migrate)  shift; cmd_migrate "$@" ;;
+  exec)     shift; cmd_exec "$@" ;;
+  copy)     shift; cmd_copy "$@" ;;
+  rfc)      shift; cmd_rfc "$@" ;;
+  pwcheck)  shift; cmd_pwcheck "$@" ;;
+  edit)     shift; cmd_edit ;;
+  ui)       shift; exec "$(creds_python)" "$SELF/ui_server.py" "$@" ;;
+  sync-ssh) shift; cmd_sync_ssh ;;
+  doctor)   shift; cmd_doctor ;;
+  restore)  shift; cmd_restore "$@" ;;
+  *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac
