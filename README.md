@@ -14,6 +14,7 @@ Designed to be safe for an AI coding agent to use on your behalf — see
 creds find acme qas              # search; secrets stripped from output
 creds copy acme-qas-abap-q01     # password -> clipboard, auto-clears
 creds exec <id> -- <command>     # run something with CREDS_* injected
+creds browser <id>               # log a throwaway browser in, password never shown
 creds path my-laptop acme-prd    # route through the landscape + prerequisites
 creds lint                       # naming/consistency check
 creds ui                         # local web editor, 127.0.0.1, token-gated
@@ -21,8 +22,49 @@ creds ui                         # local web editor, 127.0.0.1, token-gated
 
 ---
 
+## What it does
+
+**Storage.** One `age`-encrypted file, decrypted in memory per command and never
+written back in plaintext. Per-machine private key; the index itself is safe to sync.
+
+**Finding things.** `creds find` AND-matches across id, customer, environment, kind,
+host, user and tags, and strips every secret from its output — so the result is safe
+to read, quote, log or hand to an AI agent.
+
+**Using a credential without seeing it.** `creds exec` injects `CREDS_*` into a child
+process only. `creds copy` puts a password on the clipboard without displaying it.
+`creds browser` logs a disposable browser in and reports "logged on" or "failed".
+No path prints a secret, so none can leak into a shell history or a chat transcript.
+
+**Not connecting to the wrong system.** Ids read `<customer>-<env>-<kind>-<identity>`,
+so the environment is visible in the command you are about to run. `env: prd` entries
+refuse to execute without `CREDS_ALLOW_PROD=1`. `creds lint` fails if an id says `prd`
+while the record says `dev` — a false safety signal being worse than none.
+
+**Knowing why a connection failed.** Entries record their prerequisites — a VPN, a
+SAProuter string, a bastion to jump through. `creds exec` prints them before running,
+and `creds path` walks the landscape graph between two systems, including time-windowed
+firewall rules. "The VPN is down" and "the password is wrong" look identical otherwise.
+
+**Checking a credential actually works.** Per-protocol probes for ABAP, NetWeaver Java,
+HANA, SSH/SFTP, RDP, BusinessObjects, vCenter and OAuth2 APIs. Probes control against a
+deliberately wrong credential, and say INCONCLUSIVE rather than claiming success when
+the endpoint answers the same either way. Accounts that lock are controlled with a
+random *username*, never a wrong password.
+
+**Logging into web systems.** A browser extension fills the logon form for the site you
+are on, matching exactly on origin so a lookalike domain can never collect a credential.
+For unattended work, `creds browser` does the same headlessly.
+
+**Landscape, not just a list.** Systems, nodes and edges form a graph, editable on an
+SVG canvas, so the index describes how a landscape connects rather than only what it
+contains.
+
+---
+
 ## Contents
 
+- [What it does](#what-it-does)
 - [Why it exists](#why-it-exists)
 - [How it works](#how-it-works)
 - [Requirements](#requirements)

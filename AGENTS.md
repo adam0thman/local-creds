@@ -97,6 +97,11 @@ creds lint --customer <name> --all
 
 `find` output has secrets stripped — it is safe to read and safe to quote back.
 
+Kinds you will meet: `abap` `java` `hana` `ssh` `sftp` `rdp` `bo` `api` `odata`
+`vmware` `vpn` `router` `file`, plus `webdisp` (SAP Web Dispatcher), `scc` (SAP Cloud
+Connector) and `suser` (SAP Support Portal account). `rfc`/`sapgui` are legacy and
+superseded by `abap`.
+
 ### Run something against a system
 
 ```bash
@@ -110,6 +115,31 @@ each entry field (`CREDS_SID`, `CREDS_CLIENT`, `CREDS_SYSNR`, `CREDS_ROUTER`, �
 
 For SSH work, write a small script that reads `os.environ` and pass it to `creds exec`.
 Do not template the password into a shell string.
+
+### Log into a web system without seeing the password
+
+```bash
+creds browser <id>                  # open, fill, log on, leave the window up
+creds browser <id> --headless       # unattended
+creds browser <id> --no-submit      # fill only, no logon attempt, no lockout risk
+creds browser <id> --shot out.png   # screenshot the result
+```
+
+This is **your** path for anything web-based. The password goes from `creds exec`'s
+environment straight into the page; you get back "logged on", "rejected" or "did not
+submit", never the secret. Start with `--no-submit` on anything you have not tried —
+it proves the form was found without spending an attempt.
+
+The browser is disposable: no cookie jar on disk, no history, none of the human's real
+sessions, and the system keychain is not exposed to it. Do not add a persistent profile
+to "keep me logged in" — that is how an automated run starts acting as the human
+somewhere nobody intended.
+
+If it reports **did not submit**, that is not a wrong password. Nothing was sent. Say
+so plainly rather than suggesting a password reset.
+
+Note the browser extension in `extension/` is for the *human*, not for you. It needs a
+toolbar click by design. You do not need it and must not widen it (see 4.5).
 
 ### Understand connectivity before blaming credentials
 
@@ -199,10 +229,18 @@ is in the README under "Not planned".
 
 ### 4.6 `fields.url` is a security boundary, not a bookmark
 
-It is the origin the browser extension matches a page against before releasing a
-password. Store `scheme://host[:port]` — a path is ignored by matching. Never widen it
-to a bare domain to "make it match more": exact origin comparison is what stops
-`sap.example.com.evil.io` from collecting a real credential.
+It is the origin the browser extension and `creds browser` match a page against before
+releasing a password. Store `scheme://host[:port]` — a path is kept for convenience and
+ignored by matching. Never widen it to a bare domain to "make it match more": exact
+origin comparison is what stops `sap.example.com.evil.io` from collecting a credential.
+
+**Several origins go on one entry, whitespace-separated.** One system routinely answers
+on more than one name — an internal hostname and a public vanity URL, or a pair behind
+a VIP. That is a list, not a reason to duplicate the entry: two entries for one system
+means two passwords to rotate and one of them will be missed.
+
+Do not invent one. An origin you guessed either never matches (dead weight nobody
+re-checks) or points a credential somewhere unintended.
 
 `creds lint` warns about a url it cannot use; `creds-nm` refuses it outright. If you
 change one of those rules, change both, and remember the asymmetry — plaintext http is
