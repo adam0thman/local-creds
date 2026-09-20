@@ -920,7 +920,7 @@ lint.py             convention checks         ui_server.py     local web server
 migrate.py          id + kind migration       *.java           JCo probes (need SAP JCo)
 creds-nm            native messaging host     extension/       browser extension
 browser.py          disposable-browser logon  extension/fill.js  shared form filler
-test_creds.sh       211 self-checks           AGENTS.md        instructions for AI agents
+test_creds.sh       220 self-checks           AGENTS.md        instructions for AI agents
 ```
 
 **Not in this repo, by design:** your `creds.age`, your `recipients.txt`, your keys,
@@ -931,7 +931,7 @@ your `.backups/`, and SAP JCo (licensed).
 ## Development
 
 ```bash
-sh test_creds.sh          # 211 checks, throwaway index, no network
+sh test_creds.sh          # 220 checks, throwaway index, no network
 ```
 
 The suite creates its own age key and index in a temp dir — it never touches your real
