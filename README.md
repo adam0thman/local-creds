@@ -34,6 +34,7 @@ creds ui                         # local web editor, 127.0.0.1, token-gated
 - [Connection tests](#connection-tests)
 - [The landscape graph](#the-landscape-graph)
 - [Browser extension](#browser-extension)
+- [Automated logon (`creds browser`)](#automated-logon-creds-browser)
 - [Safety model](#safety-model)
 - [Multiple machines](#multiple-machines)
 - [Limitations](#limitations)
@@ -598,6 +599,52 @@ it works. Production entries need a second confirmation either way, mirroring
 
 ---
 
+## Automated logon (`creds browser`)
+
+The extension is for your hands. `creds browser` is for a script or an agent: it logs a
+**disposable** browser into a system without the password being visible to the caller.
+
+```bash
+creds browser <id>                  # open, fill, log on, leave the window up
+creds browser <id> --headless       # no window
+creds browser <id> --no-submit      # fill only
+creds browser <id> --shot out.png   # screenshot the result
+```
+
+It runs through `creds exec`, so the production guard, the `requires` notice and the
+secret handling are identical to every other command. The password arrives in the
+child process's environment and goes straight into the page: never an argument (`argv`
+is readable by every process via `ps`), never printed, never returned. An agent can
+drive this and still never see the secret.
+
+**Its own profile, and not yours.** Chromium runs against an in-memory context — no
+cookie jar on disk, no history, no saved passwords, and none of your real sessions. If
+a script misnavigates it is not logged in as you anywhere, and your own browser stays
+usable because there is no profile lock to contend with. On close, cookies and web
+storage are cleared explicitly as well.
+
+**One attempt, ever.** `submit_once()` refuses a second logon in the same run. Many
+accounts lock after three failures and some SAP systems after three, so this is a
+runtime guard rather than a convention — a retry loop added later raises instead of
+locking a real admin account.
+
+**Cross-origin redirects are refused** unless you pass `--allow-redirect`. A logon URL
+that bounces to another origin is normal for SAML, and is also how a credential reaches
+an identity provider you did not intend.
+
+Field detection is `extension/fill.js` — literally the same code the extension uses, so
+there is one implementation and one set of unit tests behind both.
+
+Playwright is optional and not installed for you:
+
+```bash
+python3 -m venv ~/.cache/creds/venv
+~/.cache/creds/venv/bin/pip install playwright
+~/.cache/creds/venv/bin/playwright install chromium
+```
+
+---
+
 ## Safety model
 
 These are the rules the tool enforces, and the reasoning behind each.
@@ -785,8 +832,8 @@ graph.py            landscape graph + path    landscape.html   SVG canvas
 lint.py             convention checks         ui_server.py     local web server
 migrate.py          id + kind migration       *.java           JCo probes (need SAP JCo)
 creds-nm            native messaging host     extension/       browser extension
-                                              extension/fill.js  injected form filler
-test_creds.sh       202 self-checks           AGENTS.md        instructions for AI agents
+browser.py          disposable-browser logon  extension/fill.js  shared form filler
+test_creds.sh       211 self-checks           AGENTS.md        instructions for AI agents
 ```
 
 **Not in this repo, by design:** your `creds.age`, your `recipients.txt`, your keys,
@@ -797,7 +844,7 @@ your `.backups/`, and SAP JCo (licensed).
 ## Development
 
 ```bash
-sh test_creds.sh          # 202 checks, throwaway index, no network
+sh test_creds.sh          # 211 checks, throwaway index, no network
 ```
 
 The suite creates its own age key and index in a temp dir — it never touches your real

@@ -6,6 +6,7 @@
 #   creds migrate --customer x      propose convention ids + rfc/sapgui merges (--apply)
 #   creds exec <id> -- <cmd>...     run cmd with CREDS_* env injected
 #   creds copy <id>                 password -> clipboard, never displayed
+#   creds browser <id> [url]        log a throwaway browser in; password never shown
 #   creds rfc <id>                  real SAP RFC logon test via JCo
 #   creds pwcheck <id> [user]       SAP account state + password expiry
 #   creds edit                      decrypt -> $EDITOR -> re-encrypt
@@ -393,6 +394,15 @@ find_jco_lib() {
   return 1
 }
 
+# Playwright in a disposable browser. Goes through cmd_exec so the production guard,
+# the `requires` notice and the secret handling are the same as every other command --
+# the password reaches browser.py in its environment and never becomes an argument.
+cmd_browser() {
+  [ $# -ge 1 ] || die "usage: creds browser <id> [url] [--headless] [--no-submit] [--shot f]"
+  id=$1; shift
+  cmd_exec "$id" -- "$(creds_python)" "$SELF/browser.py" "$@"
+}
+
 cmd_rfc() {
   [ $# -ge 1 ] || die "usage: creds rfc <id>"
   lib=$(find_jco_lib) || die "no readable sapjco3.jar found (set CREDS_JCO_LIB). If it lives
@@ -484,6 +494,7 @@ case "${1:-}" in
   migrate)  shift; cmd_migrate "$@" ;;
   exec)     shift; cmd_exec "$@" ;;
   copy)     shift; cmd_copy "$@" ;;
+  browser)  shift; cmd_browser "$@" ;;
   rfc)      shift; cmd_rfc "$@" ;;
   pwcheck)  shift; cmd_pwcheck "$@" ;;
   edit)     shift; cmd_edit ;;

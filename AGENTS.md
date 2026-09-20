@@ -207,7 +207,7 @@ and one stray click silently rewrites it. `creds lint` warns about unregistered 
 ## 5. Rules for changing the code
 
 - **Run `sh test_creds.sh` before and after.** It uses a throwaway index and touches no
-  network. 202 checks; keep it at zero failures.
+  network. 211 checks; keep it at zero failures.
 - **Add a check for any non-trivial behaviour you add.** Especially anything touching
   secrets, the production guard, or merging.
 - **Verify a test actually fails when the behaviour breaks.** A check like

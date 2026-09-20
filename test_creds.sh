@@ -1032,6 +1032,44 @@ check "nm fill does not leak a sibling login on the same system" \
 # Injection is programmatic and gesture-gated: activeTab + scripting, never a
 # declarative content script and never a blanket host permission. Losing that means
 # the extension is present on every page you visit instead of only when you click it.
+# ---- creds browser (playwright, disposable profile) ------------------------
+check "browser.py pure logic passes its selftest" \
+  '"$HERE/browser.py" --selftest >/dev/null 2>&1 || python3 "$HERE/browser.py" --selftest >/dev/null'
+
+check "creds browser without an id prints usage" \
+  '"$HERE/creds" browser 2>&1 | grep -q "usage: creds browser"'
+
+# The password reaches browser.py through the environment that creds exec sets up.
+# Putting it on the command line would expose it to every process on the box via ps.
+check "creds browser never puts the password in a command line" \
+  '! grep -n "cmd_browser" -A 5 "$HERE/creds" | grep -qE "CREDS_PASSWORD|\$pw|secret"'
+
+check "browser.py reads the password from the environment, never argv" \
+  'grep -q "os.environ.get(\"CREDS_PASSWORD\")" "$HERE/browser.py" && \
+   ! grep -qE "argv.*(password|secret)|add_argument.*(password|secret)" "$HERE/browser.py"'
+
+check "browser.py never prints the password" \
+  '! grep -nE "print.*(secret|CREDS_PASSWORD)" "$HERE/browser.py"'
+
+# Many SAP accounts lock after three failures. There must be no retry loop.
+# Enforced by a guard, not by grepping for loop syntax -- a retry loop can be written
+# in more ways than a regex can anticipate, and locking an admin account is expensive.
+check "browser.py refuses a second logon attempt in one run" \
+  'grep -q "refusing a second logon attempt" "$HERE/browser.py" && \
+   grep -q "submit_once(page)" "$HERE/browser.py"'
+
+check "browser.py refuses a cross-origin redirect unless asked" \
+  'grep -q "allow-redirect" "$HERE/browser.py" && \
+   grep -q "landed != expect_origin and not args.allow_redirect" "$HERE/browser.py"'
+
+check "browser.py uses a disposable in-memory context, never a persistent profile" \
+  '! grep -qE "launch_persistent_context\(|user_data_dir *=" "$HERE/browser.py" && \
+   grep -q "context.clear_cookies()" "$HERE/browser.py" && \
+   grep -q "browser.new_context()" "$HERE/browser.py"'
+
+check "browser.py shares field detection with the extension" \
+  'grep -q "extension. / .fill.js" "$HERE/browser.py" || grep -q "\"fill.js\"" "$HERE/browser.py"'
+
 # The browser can read the index and never change it. A write path here would let a
 # compromised extension alter entries -- editing stays with `creds edit` / `creds ui`.
 check "creds-nm exposes only read-only commands" \
