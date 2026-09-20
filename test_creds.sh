@@ -921,3 +921,147 @@ check "lint does not warn about a registered kind" \
   'printf "%s" "{\"version\":1,\"entries\":[{\"id\":\"z-prd-vmware-vc\",\"customer\":\"z\",\"env\":\"prd\",\"kind\":\"vmware\",\"host\":\"h\",\"fields\":{}}]}" > "$TD/kn.json"; \
    age -R "$TD/recipients.txt" -o "$TD/creds.age" "$TD/kn.json"; \
    ! "$HERE/creds" lint | grep -q "is not registered"'
+
+# ---- fields.url (autofill origin) -----------------------------------------
+# url is the ORIGIN a browser page is matched against before a password is filled.
+# The rule that earns its keep: plaintext http is fine to a PRIVATE address (most of
+# an SAP estate is internal http) but not to a public one. A well-meaning tightening
+# to https-only would silently kill autofill for every internal Fiori/PI/cockpit URL,
+# so that case is pinned here.
+url_lint() {
+  printf '%s' "{\"version\":1,\"entries\":[{\"id\":\"z-dev-java-pid\",\"customer\":\"z\",\"env\":\"dev\",\"kind\":\"java\",\"host\":\"h\",\"fields\":{\"url\":\"$1\"}}]}" > "$TD/url.json"
+  age -R "$TD/recipients.txt" -o "$TD/creds.age" "$TD/url.json"
+  "$HERE/creds" lint --all 2>&1
+}
+
+check "lint accepts plaintext http to a private address" \
+  '! url_lint "http://10.70.212.13:50000/dir/start/index.jsp" | grep -q "crosses the open internet"'
+
+check "lint warns about plaintext http to a public host" \
+  'url_lint "http://portal.example.com" | grep -q "crosses the open internet"'
+
+check "lint warns about a url with no scheme" \
+  'url_lint "portal.example.com/login" | grep -q "never match a page"'
+
+check "lint warns about a non-web url scheme" \
+  'url_lint "ssh://box.example.com" | grep -q "is not http(s)"'
+
+check "lint accepts https to a public host" \
+  '! url_lint "https://um018.atlassian.net" | grep -qE "(ERROR|WARN) +z-dev-java-pid"'
+
+# ---- creds-nm (browser native messaging host) ------------------------------
+# The whole security model is the DOUBLE ORIGIN CHECK: the extension may only ask
+# "what fits this origin", and `fill` re-derives the match from the origin instead of
+# trusting the id it was handed. Sabotaging that check must break these tests.
+cat > "$TD/nm.json" <<'JSON'
+{"version":1,"entries":[
+ {"id":"acme-dev-java-pi","customer":"acme","env":"dev","kind":"java",
+  "host":"10.70.1.1","user":"Administrator","secret":"nmdevpw123",
+  "fields":{"url":"http://10.70.1.1:50000/dir/start/index.jsp"}},
+ {"id":"acme-prd-api-jira","customer":"acme","env":"prd","kind":"api",
+  "host":"x.atlassian.net","user":"bot@acme.test","secret":"nmprodpw456",
+  "fields":{"url":"https://x.atlassian.net/rest/api/2"}},
+ {"id":"acme-dev-abap-d01","customer":"acme","env":"dev","kind":"abap",
+  "host":"d01.acme.test",
+  "logins":[{"client":"100","user":"DDIC","secret":"nmloginpw789"},
+            {"client":"200","user":"SAPUSER","secret":"nmloginpw200"}],
+  "fields":{"url":"https://d01.acme.test"}}
+]}
+JSON
+age -R "$TD/recipients.txt" -o "$TD/creds.age" "$TD/nm.json"
+# check() runs its argument through eval, and the shell brace-expands a literal
+# {"a":1,"b":2} into two words at the comma -- so the request is built here, from
+# plain arguments, and no brace ever reaches eval.
+#   nm <cmd> [origin] [id] [user] [client] [confirm]
+nm() {
+  printf '{"cmd":"%s","origin":"%s","id":"%s","user":"%s","client":"%s","confirm":%s}\n' \
+    "$1" "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-false}" | "$HERE/creds-nm" --test
+}
+
+check "nm ping reports a healthy index" \
+  'nm ping | jq -e ".ok and .with_url == 3" >/dev/null'
+
+check "nm matches plaintext http on a private address" \
+  '[ "$(nm match http://10.70.1.1:50000 | jq -r ".candidates[0].id")" = "acme-dev-java-pi" ]'
+
+check "nm ignores the path when matching origins" \
+  '[ "$(nm match https://x.atlassian.net/browse/ABC-1 | jq -r ".candidates[0].id")" = "acme-prd-api-jira" ]'
+
+check "nm refuses a lookalike domain" \
+  '[ "$(nm match https://x.atlassian.net.evil.io | jq ".candidates|length")" = "0" ]'
+
+check "nm refuses a scheme downgrade" \
+  '[ "$(nm match http://x.atlassian.net | jq ".candidates|length")" = "0" ]'
+
+check "nm refuses plaintext http to a public host" \
+  '[ "$(nm match http://d01.acme.test | jq ".candidates|length")" = "0" ]'
+
+check "nm finds a credential stored in logins[], not just flat fields" \
+  '[ "$(nm match https://d01.acme.test | jq -r ".candidates[0].user")" = "DDIC" ]'
+
+# Paired with the next check: this proves the secret really is reachable, which is what
+# stops "match never returns a secret" from passing vacuously.
+check "nm fill returns the password for a dev entry" \
+  'nm fill http://10.70.1.1:50000 acme-dev-java-pi Administrator | grep -q "nmdevpw123"'
+
+check "nm match never returns a secret" \
+  '! nm match http://10.70.1.1:50000 | grep -q "nmdevpw123"'
+
+check "nm fill refuses a production entry without confirm" \
+  'nm fill https://x.atlassian.net acme-prd-api-jira bot@acme.test | jq -e ".needs_confirm" >/dev/null'
+
+check "nm fill emits no secret when it refuses production" \
+  '! nm fill https://x.atlassian.net acme-prd-api-jira bot@acme.test | grep -q "nmprodpw456"'
+
+check "nm fill allows production once confirmed" \
+  'nm fill https://x.atlassian.net acme-prd-api-jira bot@acme.test "" true | grep -q "nmprodpw456"'
+
+# THE check. A caller naming an id that does not belong to the page's origin gets
+# nothing -- this is what makes a compromised extension harmless.
+check "nm fill refuses an id that does not belong to the origin" \
+  '! nm fill http://10.70.1.1:50000 acme-prd-api-jira bot@acme.test "" true | grep -q "nmprodpw456"'
+
+# One system, several accounts: fill must return the account that was ASKED for.
+# The origin filter alone cannot catch this -- both logins share an origin.
+check "nm fill picks the requested login, not the first on that origin" \
+  'nm fill https://d01.acme.test acme-dev-abap-d01 SAPUSER 200 | grep -q "nmloginpw200"'
+
+check "nm fill does not leak a sibling login on the same system" \
+  '! nm fill https://d01.acme.test acme-dev-abap-d01 SAPUSER 200 | grep -q "nmloginpw789"'
+
+# Injection is programmatic and gesture-gated: activeTab + scripting, never a
+# declarative content script and never a blanket host permission. Losing that means
+# the extension is present on every page you visit instead of only when you click it.
+# The browser can read the index and never change it. A write path here would let a
+# compromised extension alter entries -- editing stays with `creds edit` / `creds ui`.
+check "creds-nm exposes only read-only commands" \
+  '[ "$(grep -o "cmd_[a-z]*" "$HERE/creds-nm" | sort -u | tr "\n" " ")" = "cmd_fill cmd_match cmd_ping " ]'
+
+check "creds-nm never re-encrypts or writes the index" \
+  '! grep -qE "age., ..-R.|encrypt\(|snapshot\(" "$HERE/creds-nm"'
+
+check "nm rejects an unknown command" \
+  'nm frobnicate | jq -e ".ok == false" >/dev/null'
+
+check "the extension registers a keyboard shortcut" \
+  'jq -e "._execute_action // .commands._execute_action" "$HERE/extension/manifest.json" >/dev/null'
+
+check "the extension has no host permissions and no declarative content script" \
+  '! grep -qE "host_permissions|content_scripts|<all_urls>" "$HERE/extension/manifest.json"'
+
+check "the extension injects only via activeTab + scripting" \
+  'jq -e ".permissions | index(\"activeTab\") and index(\"scripting\")" "$HERE/extension/manifest.json" >/dev/null'
+
+check "the field picker passes its unit tests" \
+  'node "$HERE/extension/fill.test.js" >/dev/null'
+
+# Autofill must never press the button. A form's action can have changed under it,
+# and choosing to log on is the human's call.
+check "the injected script never submits a form" \
+  '! grep -qE "\.submit\(|requestSubmit|click\(\)" "$HERE/extension/fill.js"'
+
+check "the injected script re-checks the origin inside the page" \
+  'grep -q "location.origin !== expectOrigin" "$HERE/extension/fill.js"'
+
+check "the extension manifest pins its id so native messaging keeps working" \
+  'jq -e ".key and (.permissions | index(\"nativeMessaging\"))" "$HERE/extension/manifest.json" >/dev/null'

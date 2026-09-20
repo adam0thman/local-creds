@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+"""Native messaging host: answers "what credential fits this browser origin?".
+
+Chrome spawns this on demand and kills it when the port closes -- there is no daemon,
+no listening port and no token to leak. Chrome itself enforces which extension ID may
+connect (see the manifest written by --install), which is a stronger gate than anything
+we could implement on a localhost socket.
+
+THE SECURITY MODEL IS THE DOUBLE ORIGIN CHECK.
+
+The extension can never ask for an entry by id. It asks "what fits THIS origin", and
+`fill` re-derives the match from the origin again before handing over a secret. A
+compromised popup or a buggy service worker therefore still cannot pull an arbitrary
+credential out of the index -- it can only ever get the one the user is already
+looking at.
+
+Origin means (scheme, host, port), compared exactly. No substring matching, no
+wildcard subdomains: "sap.example.com" must never match "sap.example.com.evil.io".
+
+`lint` warns about a bad fields.url; this REFUSES it. Advice at edit time, enforcement
+at fill time.
+
+Runs under Chrome, not your shell: no PATH, no profile, no environment. Every external
+path here is absolute or discovered explicitly.
+
+SECRETS: only the `fill` reply ever carries one. Nothing is logged but ids and users --
+Chrome captures our stderr into its own log file, so a debug print here would write a
+password to disk.
+"""
+import json
+import os
+import shutil
+import struct
+import subprocess
+import sys
+import urllib.parse
+
+DIR = os.environ.get("LOCAL_CREDS_DIR", os.path.expanduser("~/.local-creds"))
+ENC = os.path.join(DIR, "creds.age")
+KEY = os.environ.get("LOCAL_CREDS_KEY", os.path.expanduser("~/.config/age/local-creds.key"))
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+HOST_NAME = "com.local_creds.nm"
+
+# Chrome's PATH is not your PATH. Homebrew's bin is the usual casualty: `age` resolves
+# fine in a terminal and is simply absent when Chrome spawns us.
+AGE = next((p for p in ("/opt/homebrew/bin/age", "/usr/local/bin/age", "/usr/bin/age",
+                        shutil.which("age") or "") if p and os.path.exists(p)), None)
+
+# Where each Chromium-family browser looks for native messaging manifests (macOS).
+BROWSER_DIRS = {
+    "chrome":   "~/Library/Application Support/Google/Chrome/NativeMessagingHosts",
+    "brave":    "~/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts",
+    "edge":     "~/Library/Application Support/Microsoft Edge/NativeMessagingHosts",
+    "chromium": "~/Library/Application Support/Chromium/NativeMessagingHosts",
+}
+
+
+# ---- origin ---------------------------------------------------------------
+
+def origin_of(url):
+    """(scheme, host, port), or None if `url` cannot be one.
+
+    The only part of a URL autofill ever compares. A path is stored for human
+    convenience ("open this system") and deliberately ignored here.
+    """
+    if not url or not isinstance(url, str):
+        return None
+    s = urllib.parse.urlsplit(url.strip() if "//" in url else "//" + url.strip())
+    if not s.scheme or not s.hostname or s.scheme not in ("http", "https"):
+        return None
+    try:
+        port = s.port
+    except ValueError:          # "https://h:notaport"
+        return None
+    return (s.scheme.lower(), s.hostname.lower(), port or (443 if s.scheme == "https" else 80))
+
+
+def private(host):
+    """True when `host` is definitely off the public internet. Shared with lint."""
+    sys.path.insert(0, HERE)
+    from lint import private_host
+    return private_host(host)
+
+
+def fillable(entry_url, page_origin):
+    """May a secret for `entry_url` be filled into a page served from `page_origin`?
+
+    Exact origin equality, so a scheme downgrade (stored https, page http) fails too.
+    Plaintext http is allowed ONLY to a private address: most of an SAP estate is
+    internal http, and refusing it would make autofill useless for Fiori launchpads,
+    PI directories and HANA cockpits. To the public internet it is refused outright.
+    """
+    a, b = origin_of(entry_url), origin_of(page_origin)
+    if not a or not b or a != b:
+        return False
+    return a[0] == "https" or private(a[1])
+
+
+# ---- index ----------------------------------------------------------------
+
+def decrypt():
+    if AGE is None:
+        raise RuntimeError("age binary not found")
+    out = subprocess.run([AGE, "-d", "-i", KEY, ENC], capture_output=True)
+    if out.returncode != 0:
+        raise RuntimeError("cannot decrypt the index")
+    return json.loads(out.stdout)
+
+
+def logins_of(entry):
+    """Every (client, user, secret) on an entry, from logins[] or the flat fields.
+
+    Reading only the flat fields silently drops the credentials of a migrated entry --
+    the same bug that has already cost this project real data once.
+    """
+    out = []
+    for lg in entry.get("logins") or []:
+        out.append((str(lg.get("client") or ""), lg.get("user") or "", lg.get("secret") or ""))
+    if not out and (entry.get("user") or entry.get("secret")):
+        out.append((str((entry.get("fields") or {}).get("client") or ""),
+                    entry.get("user") or "", entry.get("secret") or ""))
+    return out
+
+
+def candidates(index, page_origin):
+    """Every (entry, client, user, secret) whose url matches `page_origin`."""
+    hits = []
+    for e in index.get("entries") or []:
+        url = (e.get("fields") or {}).get("url")
+        if not url or not fillable(str(url), page_origin):
+            continue
+        for client, user, secret in logins_of(e):
+            if user or secret:
+                hits.append((e, client, user, secret))
+    return hits
+
+
+# ---- commands -------------------------------------------------------------
+
+def cmd_match(req):
+    """Metadata for everything that fits this origin. NEVER a secret."""
+    origin = req.get("origin") or ""
+    if not origin_of(origin):
+        return {"ok": False, "error": "no usable origin"}
+    hits = candidates(decrypt(), origin)
+    return {"ok": True, "origin": origin, "candidates": [
+        {"id": e.get("id"), "user": user, "client": client,
+         "customer": e.get("customer"), "env": e.get("env"), "kind": e.get("kind"),
+         # The popup must show prod differently, and `fill` will demand a confirm.
+         "prod": (e.get("env") or "") == "prd"}
+        for e, client, user, _ in hits]}
+
+
+def cmd_fill(req):
+    """One secret, for one deliberate user action.
+
+    Re-derives the match from the origin rather than trusting the id in the request.
+    This is the check that makes a compromised extension harmless.
+    """
+    origin, ident = req.get("origin") or "", req.get("id") or ""
+    user, client = req.get("user") or "", str(req.get("client") or "")
+    if not origin_of(origin):
+        return {"ok": False, "error": "no usable origin"}
+    for e, c, u, secret in candidates(decrypt(), origin):
+        if e.get("id") != ident or u != user or c != client:
+            continue
+        # Same guard as `creds exec`: production needs a deliberate, separate yes.
+        if (e.get("env") or "") == "prd" and not req.get("confirm"):
+            return {"ok": False, "error": "production entry — confirm required",
+                    "needs_confirm": True, "id": ident}
+        if not secret:
+            return {"ok": False, "error": "entry has no password stored"}
+        return {"ok": True, "id": ident, "user": u, "client": c, "secret": secret}
+    return {"ok": False, "error": "no entry matches that origin"}
+
+
+def cmd_ping(_req):
+    """Health, for the popup to tell "not installed" from "nothing matches"."""
+    problems = []
+    if AGE is None:
+        problems.append("age binary not found")
+    if not os.path.exists(ENC):
+        problems.append(f"index not found at {ENC}")
+    if not os.access(KEY, os.R_OK):
+        problems.append(f"identity not readable at {KEY}")
+    n = None
+    if not problems:
+        try:
+            n = len([e for e in (decrypt().get("entries") or [])
+                     if (e.get("fields") or {}).get("url")])
+        except Exception as exc:
+            problems.append(str(exc))
+    return {"ok": not problems, "problems": problems, "with_url": n}
+
+
+COMMANDS = {"match": cmd_match, "fill": cmd_fill, "ping": cmd_ping}
+
+
+def handle(req):
+    fn = COMMANDS.get(req.get("cmd"))
+    if fn is None:
+        return {"ok": False, "error": f"unknown cmd {req.get('cmd')!r}"}
+    try:
+        return fn(req)
+    except Exception as exc:
+        # Type and message only. An index-derived value could be a secret.
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+# ---- transports -----------------------------------------------------------
+
+def serve_native():
+    """Chrome's framing: 4-byte native-endian length, then that many bytes of JSON."""
+    stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
+    while True:
+        head = stdin.read(4)
+        if len(head) < 4:
+            return
+        n = struct.unpack("@I", head)[0]
+        if n > 1 << 20:
+            return
+        try:
+            req = json.loads(stdin.read(n) or b"{}")
+        except json.JSONDecodeError:
+            req = {}
+        body = json.dumps(handle(req)).encode()
+        stdout.write(struct.pack("@I", len(body)) + body)
+        stdout.flush()
+
+
+def serve_lines():
+    """--test: one JSON request per line, one JSON reply per line. No Chrome needed."""
+    for line in sys.stdin:
+        if line.strip():
+            print(json.dumps(handle(json.loads(line))), flush=True)
+
+
+def install(extension_id):
+    """Write the manifest that tells each browser this host exists, and who may talk."""
+    if not extension_id or len(extension_id) != 32 or not extension_id.isalpha():
+        print("usage: creds-nm --install <32-char-extension-id>", file=sys.stderr)
+        return 2
+    manifest = {
+        "name": HOST_NAME,
+        "description": "local-creds credential lookup",
+        "path": os.path.join(HERE, "creds-nm"),
+        "type": "stdio",
+        "allowed_origins": [f"chrome-extension://{extension_id}/"],
+    }
+    for name, d in BROWSER_DIRS.items():
+        d = os.path.expanduser(d)
+        if not os.path.isdir(os.path.dirname(d)):
+            continue                       # that browser is not installed
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, HOST_NAME + ".json")
+        with open(path, "w") as fh:
+            json.dump(manifest, fh, indent=2)
+        print(f"  installed for {name}: {path}")
+    print(f"\nRestart the browser. Verify with:  echo '{{\"cmd\":\"ping\"}}' | "
+          f"{os.path.join(HERE, 'creds-nm')} --test")
+    return 0
+
+
+if __name__ == "__main__":
+    if "--install" in sys.argv:
+        i = sys.argv.index("--install")
+        sys.exit(install(sys.argv[i + 1] if i + 1 < len(sys.argv) else ""))
+    if "--test" in sys.argv:
+        serve_lines()
+    else:
+        serve_native()

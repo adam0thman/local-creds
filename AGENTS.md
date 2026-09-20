@@ -185,7 +185,18 @@ no signal, because it invites trust.
 When you do not know the environment, default to `prd`. Over-guarding is an
 inconvenience; under-guarding is an outage.
 
-### 4.5 Register a new `kind` in three places at once
+### 4.5 `fields.url` is a security boundary, not a bookmark
+
+It is the origin the browser extension matches a page against before releasing a
+password. Store `scheme://host[:port]` — a path is ignored by matching. Never widen it
+to a bare domain to "make it match more": exact origin comparison is what stops
+`sap.example.com.evil.io` from collecting a real credential.
+
+`creds lint` warns about a url it cannot use; `creds-nm` refuses it outright. If you
+change one of those rules, change both, and remember the asymmetry — plaintext http is
+legitimate to a private address and never to a public one.
+
+### 4.6 Register a new `kind` in three places at once
 
 `lint.py` (KINDS), `migrate.py` (`identity()`), `ui.html` (KINDS, KIND_FIELDS,
 `defaultProtocols`). A kind the UI does not know shows no selected option in the editor,
@@ -196,7 +207,7 @@ and one stray click silently rewrites it. `creds lint` warns about unregistered 
 ## 5. Rules for changing the code
 
 - **Run `sh test_creds.sh` before and after.** It uses a throwaway index and touches no
-  network. 172 checks; keep it at zero failures.
+  network. 202 checks; keep it at zero failures.
 - **Add a check for any non-trivial behaviour you add.** Especially anything touching
   secrets, the production guard, or merging.
 - **Verify a test actually fails when the behaviour breaks.** A check like

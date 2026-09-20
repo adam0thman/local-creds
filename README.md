@@ -33,6 +33,7 @@ creds ui                         # local web editor, 127.0.0.1, token-gated
 - [Naming convention](#naming-convention)
 - [Connection tests](#connection-tests)
 - [The landscape graph](#the-landscape-graph)
+- [Browser extension](#browser-extension)
 - [Safety model](#safety-model)
 - [Multiple machines](#multiple-machines)
 - [Limitations](#limitations)
@@ -480,6 +481,123 @@ in the side panel, **Tidy** for automatic left-to-right tier layout
 
 ---
 
+## Browser extension
+
+Chrome, Brave, Edge and Chromium. Fills the logon form for the site you are on — or
+copies the password if you prefer — so a web logon stops being "find the entry,
+`creds copy`, switch window, paste".
+
+### How it talks to the index
+
+The index is age-encrypted and `creds` decrypts only in memory, per command, so an
+extension cannot read the file. It goes through a **native messaging host**
+(`creds-nm`): Chrome spawns it on demand and kills it when the popup closes. No
+daemon, no listening port, no token to leak, and the browser itself enforces which
+extension ID may connect.
+
+```
+[click toolbar icon]
+  popup ──active tab's origin──▶ creds-nm ──▶ decrypt in memory
+                                    │         filter on fields.url origin
+                                    ▼
+                    [{id, user, env}]   ← metadata only, never a secret
+  pick one (production asks again) ──▶ creds-nm re-checks the origin ──▶ password
+```
+
+The extension can never ask for an entry **by id**. It asks "what fits this origin",
+and `fill` re-derives the match from the origin before releasing anything. A
+compromised popup still cannot pull an arbitrary credential out of the index.
+
+### Which entries it can find
+
+Those with a `url` in `fields`, holding the origin you log into:
+
+```bash
+creds ui          # add: url = https://jira.example.com
+creds lint        # warns if it cannot be an origin
+```
+
+Matching is exact on scheme, host and port. A path is stored for convenience and
+ignored. `sap.example.com` never matches `sap.example.com.evil.io`, and an entry
+stored as `https` is not offered on an `http` page.
+
+Plaintext `http` is allowed **only to a private address** — most of an SAP estate is
+internal http, and refusing it would make the extension useless for Fiori launchpads,
+PI directories and HANA cockpits. To a public host it is refused outright.
+
+### Install
+
+```bash
+# 1. load the extension: chrome://extensions → Developer mode → Load unpacked
+#    → select the extension/ folder in this repo
+# 2. register the native host for every browser you use
+./creds-nm --install hghfobjabmappldeanhennjhchbofdoc
+# 3. restart the browser
+```
+
+`Cmd+Shift+Y` (`Ctrl+Shift+Y` elsewhere) opens it without reaching for the mouse;
+rebind at `chrome://extensions/shortcuts`. When exactly one non-production entry
+matches, the Fill button takes focus, so the whole logon is shortcut → Enter → Enter.
+
+The ID above is fixed by the `key` in `extension/manifest.json`, so it survives
+reloads. If you repack with your own key, pass your own ID instead.
+
+Check it without the browser at all:
+
+```bash
+echo '{"cmd":"ping"}' | ./creds-nm --test
+```
+
+`creds-nm` runs under the browser, not your shell — no `PATH`, no profile. It finds
+`age` at the usual absolute locations; if yours lives elsewhere, `ping` says so.
+
+### Filling
+
+The form is filled, never submitted. Pressing Enter stays your decision: a form's
+`action` can have changed under the page, and an autofill that also submits will post
+the credential wherever it now points.
+
+Injection is **programmatic and gesture-gated** — `activeTab` plus `scripting`, no
+declarative content script and no blanket host permission. The extension has no
+presence on any page until the moment you click Fill, and the injected code runs in
+Chrome's isolated world, so page scripts can neither see it nor read the argument
+carrying the password.
+
+Two cases are refused rather than guessed:
+
+| Page | Why |
+|---|---|
+| several visible password boxes | a change-password form — filling would type your current password into "new password" |
+| no visible password box | nothing to fill; hidden fields are honeypots or leftovers |
+
+The username is taken from `autocomplete="username"` when the form says so, otherwise
+the nearest typeable field before the password — which is what the SAP BSP logon
+(`sap-user` / `sap-password`) and essentially every classic form look like.
+
+The origin is checked three times before a password moves: when the popup matches,
+again against the tab's current URL before the secret is fetched, and once more inside
+the page by the injected script. The middle two exist because a tab can navigate while
+the popup is open.
+
+### When nothing matches
+
+The popup says so and offers to copy the origin, so adding it to an entry in
+`creds ui` is one paste.
+
+It does **not** offer to write the entry for you. `creds-nm` has three commands —
+`match`, `fill`, `ping` — and none of them can alter the index; the test suite asserts
+that. The browser is the least trustworthy thing with access to this data, so it gets
+read-only access and editing stays with `creds edit` and `creds ui`.
+
+### Copying
+
+The Copy button is still there for a form the filler cannot read. Note that clipboards
+sync across devices and any running app can read them — filling is the safer path when
+it works. Production entries need a second confirmation either way, mirroring
+`CREDS_ALLOW_PROD=1` on the CLI.
+
+---
+
 ## Safety model
 
 These are the rules the tool enforces, and the reasoning behind each.
@@ -604,21 +722,13 @@ secrets with audit, rotation and revocation, use a product built for that.
 
 Ideas, not commitments. Ordered by how much they would change daily use.
 
-### Browser extension — autofill from the index
+### Browser extension — the harder pages
 
-Today, logging into a web UI means `creds copy <id>` then paste. A browser extension
-could fill the form directly, matching on the entry's `base_url`/`host`.
-
-The interesting constraint is that the index is age-encrypted at rest and `creds`
-decrypts only in memory, per command — so the extension cannot read the file itself.
-The workable shape is a **native messaging host**: the extension asks a small local
-helper, the helper shells out to `creds`, and the secret goes straight into the form
-without passing through page-visible JavaScript or the clipboard. That keeps the
-existing guarantee — secrets never land in a file, a log, or `argv` — while removing
-the clipboard hop, which is currently the least protected part of the flow.
-
-Open questions: per-site confirmation (autofill should not be silent for `env: prd`),
-and whether the helper reuses the existing token-gated local server or is separate.
+Filling works on classic forms. Still open: logons inside an `<iframe>` (the injected
+script only touches the main frame), SAML flows that bounce to a different origin
+mid-logon, and SAPUI5 screens that build their inputs late enough that a click arrives
+before the field exists. Each is a real case in an SAP estate; none is solved by
+guessing harder.
 
 ### Automatic client-certificate selection
 
@@ -674,7 +784,9 @@ creds               the CLI (POSIX sh)        ui.html          entry editor
 graph.py            landscape graph + path    landscape.html   SVG canvas
 lint.py             convention checks         ui_server.py     local web server
 migrate.py          id + kind migration       *.java           JCo probes (need SAP JCo)
-test_creds.sh       172 self-checks           AGENTS.md        instructions for AI agents
+creds-nm            native messaging host     extension/       browser extension
+                                              extension/fill.js  injected form filler
+test_creds.sh       202 self-checks           AGENTS.md        instructions for AI agents
 ```
 
 **Not in this repo, by design:** your `creds.age`, your `recipients.txt`, your keys,
@@ -685,7 +797,7 @@ your `.backups/`, and SAP JCo (licensed).
 ## Development
 
 ```bash
-sh test_creds.sh          # 172 checks, throwaway index, no network
+sh test_creds.sh          # 202 checks, throwaway index, no network
 ```
 
 The suite creates its own age key and index in a temp dir — it never touches your real

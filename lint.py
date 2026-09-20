@@ -14,9 +14,11 @@ the box when you next work that customer, never by reformatting the display text
 SECRETS: stdin carries the decrypted index. Nothing here may print a secret; entries
 and logins are referred to by id, user and client only.
 """
+import ipaddress
 import json
 import re
 import sys
+import urllib.parse
 
 ENVS = {"dev", "qas", "tst", "prd", "sbx", "trn", "all"}
 KINDS = {"abap", "java", "ssh", "hana", "rdp", "bo", "api", "vpn", "router", "sftp",
@@ -25,6 +27,46 @@ LEGACY_KINDS = {"rfc", "sapgui"}          # superseded by the merged `abap` kind
 IPISH = re.compile(r"(^|-)\d{1,3}-\d{1,3}-\d{1,3}(-|$)")
 
 ERROR, WARN, INFO = "ERROR", "WARN", "INFO"
+
+
+def private_host(h):
+    """True when h is definitely NOT on the public internet.
+
+    No DNS lookups: lint must not do network I/O, and an internal name only resolves
+    from the right network anyway. Literal private/loopback IPs and dotless or
+    .local-style names are what can be decided offline. Everything else is treated as
+    public, which is the safe direction -- it costs a warning, never a missed one.
+    """
+    try:
+        ip = ipaddress.ip_address(h)
+        return ip.is_private or ip.is_loopback
+    except ValueError:
+        pass
+    return "." not in h or h.endswith((".local", ".internal", ".lan", ".corp"))
+
+
+def check_url(url):
+    """Why fields.url is unusable, or None if it is fine.
+
+    `url` is the browser ORIGIN a page is matched against before a password is filled.
+    Only scheme://host:port is ever compared -- a path is kept for convenience ("open
+    this system") and ignored by matching.
+    """
+    u = urllib.parse.urlsplit(url if "//" in url else "//" + url)
+    if not u.scheme or not u.hostname:
+        return (f"url '{url}' has no scheme://host — autofill matches on origin, "
+                f"so this can never match a page")
+    if u.scheme not in ("http", "https"):
+        return f"url scheme '{u.scheme}' is not http(s); autofill only handles web logins"
+    try:
+        u.port
+    except ValueError:
+        return f"url '{url}' has a non-numeric port"
+    if u.scheme == "http" and not private_host(u.hostname):
+        return (f"url is plaintext http to '{u.hostname}', which does not look like a "
+                f"private address — a password filled there crosses the open internet. "
+                f"Use https, or confirm the host really is internal")
+    return None
 
 
 def lint(index, customer=None, nonconforming=None):
@@ -84,6 +126,15 @@ def lint(index, customer=None, nonconforming=None):
         if kind in LEGACY_KINDS:
             say(INFO, eid, f"kind '{kind}' is superseded by 'abap' (ports go in "
                            f"protocols[], accounts in logins[])")
+
+        # fields.url -- the origin a browser page is matched against before a password
+        # is filled. A bad value is worse than none: it either never matches (dead
+        # weight nobody re-checks) or points somewhere a secret must not go.
+        url = (e.get("fields") or {}).get("url")
+        if url:
+            why = check_url(str(url))
+            if why:
+                say(WARN, eid, why)
 
         # `requires` is free text (vpn:x, router:/H/..., internet) OR an entry id to
         # jump through. A bare token matching no entry is almost always a rename that

@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "creds",
+  "version": "0.3.0",
+  "description": "Fill or copy a password from your local encrypted creds index for the site you are on.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyHxcrkhMeTsf60Eb17byn+SgUfP1aLOpeiAUJUmB4z5SG5zQ53YJfL7PkOwz3RKriBr8zhHmSwbIY0msxV00ocLnJyr77YsstNdRKYozkRY4G1TYFOW0t6FqsrfEhRN2+QObBewenOgVAya4BuXOM/+8stc97BvSBCr7NnNc2iGeIjXsCwFYohujjQo4b0sLMmESEHMI4nwwKgBhzKu8gdM9fqUU9G770RbE6B9XKWH2c/KNua7czh1lu8URJ5PIeiMQyD1vQO7ACX3DRIULbke0q3IONsLCfS5ucvNZOnUefmglvC4QYqCIwpxKH6SMBaPdYYYSV/1LFRCFuEXWCwIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "activeTab",
+    "scripting",
+    "clipboardWrite"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "creds"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Look up credentials for this site"
+    }
+  }
+}
