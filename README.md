@@ -7,6 +7,9 @@ deliberate extra step.
 Built for SAP Basis work across many customer landscapes, but the model is generic:
 an entry is *a way to log in to something*, and the tooling around it is vendor-neutral.
 
+Designed to be safe for an AI coding agent to use on your behalf — see
+**[AGENTS.md](AGENTS.md)** for the rules it must follow.
+
 ```bash
 creds find acme qas              # search; secrets stripped from output
 creds copy acme-qas-abap-q01     # password -> clipboard, auto-clears
@@ -32,6 +35,9 @@ creds ui                         # local web editor, 127.0.0.1, token-gated
 - [The landscape graph](#the-landscape-graph)
 - [Safety model](#safety-model)
 - [Multiple machines](#multiple-machines)
+- [Limitations](#limitations)
+- [Roadmap](#roadmap)
+- [Sister projects](#sister-projects)
 - [Files in this repo](#files-in-this-repo)
 - [Development](#development)
 - [Licence and scope](#licence-and-scope)
@@ -122,7 +128,7 @@ this repo. If you want RFC logon tests, download it from the SAP Support Portal
 ## Install
 
 ```bash
-git clone https://github.com/<you>/local-creds.git ~/creds-tool
+git clone https://github.com/adam0thman/local-creds.git ~/creds-tool
 cd ~/creds-tool
 
 # 1. data directory — keep it where you want it synced
@@ -497,6 +503,147 @@ The index syncs; the key does not.
 
 To revoke a machine, remove its line from `recipients.txt` and re-encrypt. Rotate any
 secret that machine held.
+
+---
+
+## Limitations
+
+Read this before adopting it. These are known and stated plainly rather than
+discovered later.
+
+### Platform
+
+**macOS is the only tested platform.** Everything below is about what the code
+actually calls, not a guess.
+
+| Platform | Status |
+|---|---|
+| **macOS** | Fully supported and tested |
+| **Linux** | Expected to work, **except** `creds copy` and the `keychain:` prefix (see below). Untested end to end. |
+| **Windows (native)** | **Does not run.** `creds` is a POSIX `/bin/sh` script; `cmd` and PowerShell cannot execute it. |
+| **Windows (WSL2)** | Should behave like Linux. Untested. |
+| **Windows (Git Bash / MSYS2)** | Most commands should run; `creds copy` will not. Untested. |
+
+Two calls are macOS-specific:
+
+- `creds copy` uses **`pbcopy` / `pbpaste`**. On Linux, substitute `xclip`/`wl-copy`;
+  on WSL, `clip.exe`. The auto-clear step also reads the clipboard back to avoid
+  wiping something you copied since, so a replacement needs both directions.
+- The optional `keychain:` secret prefix calls **`security find-generic-password`**.
+  Inline and `b64:` secrets work everywhere; only that one prefix is macOS-bound.
+
+Everything else — `age`, `jq`, `python3`, the graph, lint, migrate, the web UI and
+the probes — is portable.
+
+**If you are running an AI coding agent on Windows** (for example Claude Code, whose
+shell tool runs through Git Bash): `creds find`, `exec`, `path`, `lint`, `migrate` and
+`doctor` should work, and `creds copy` will not. This combination is **untested** —
+if you try it, a report either way is welcome.
+
+### Browser
+
+The web editor masks passwords with the CSS property `-webkit-text-security`,
+supported in Chrome, Edge, Safari and **Firefox 128+**. In older Firefox the field
+renders **in plaintext**. Use a current browser, or treat the editor as Chromium/Safari
+only.
+
+### Concurrency
+
+**Last write wins.** The web UI loads the entire index when the page opens and posts
+the entire index on Save. If you edit in the browser while something else (a CLI edit,
+another tab, a second machine's sync) changes the index, the later Save silently
+overwrites the earlier one. There is no stale-load detection yet.
+
+In practice: save or reload the editor before making changes elsewhere. Snapshots in
+`.backups/` mean a clobbered write is recoverable, not lost.
+
+### Scale and scope
+
+- The index is **one file**, decrypted whole into memory per command. Fine for
+  hundreds of entries; not designed for tens of thousands.
+- **No audit log.** Nothing records who used which credential when.
+- **No sharing model.** Adding a machine means adding an age recipient; there are no
+  users, groups or per-entry access.
+- **No rotation workflow.** Changing a password is a manual edit.
+- **Backups are the last 15 saves**, local to the data directory. They are not a
+  disaster-recovery plan — if you lose your age key with no other recipient, the index
+  is unrecoverable by design.
+- **`requires` is advisory.** The tool prints connectivity prerequisites; it does not
+  detect or establish a VPN.
+- **SAP JCo is not included** (licensed). RFC logon tests are unavailable without it.
+
+### What it is not
+
+This is a personal tool for one practitioner with many systems. It is not an
+enterprise secret manager, and it should not be used as one. If you need team-wide
+secrets with audit, rotation and revocation, use a product built for that.
+
+---
+
+## Roadmap
+
+Ideas, not commitments. Ordered by how much they would change daily use.
+
+### Browser extension — autofill from the index
+
+Today, logging into a web UI means `creds copy <id>` then paste. A browser extension
+could fill the form directly, matching on the entry's `base_url`/`host`.
+
+The interesting constraint is that the index is age-encrypted at rest and `creds`
+decrypts only in memory, per command — so the extension cannot read the file itself.
+The workable shape is a **native messaging host**: the extension asks a small local
+helper, the helper shells out to `creds`, and the secret goes straight into the form
+without passing through page-visible JavaScript or the clipboard. That keeps the
+existing guarantee — secrets never land in a file, a log, or `argv` — while removing
+the clipboard hop, which is currently the least protected part of the flow.
+
+Open questions: per-site confirmation (autofill should not be silent for `env: prd`),
+and whether the helper reuses the existing token-gated local server or is separate.
+
+### Automatic client-certificate selection
+
+Some systems authenticate with an X.509 client certificate rather than a password —
+SAP SNC setups, and admin UIs that require a smartcard or a per-user cert. Browsers
+prompt with a certificate chooser, and picking the wrong one for the wrong customer is
+exactly the class of mistake this tool exists to prevent.
+
+The goal: an entry records *which* certificate a given host expects, so the choice is
+driven by the index rather than by a dropdown you click through from memory. Likely
+pieces: a `cert` field (store reference, subject or thumbprint — never the private
+key), certificate awareness in `creds doctor` (is it present, is it expired), and
+selection surfaced through the same helper as the autofill extension.
+
+Worth noting that certificate *stores* are platform-specific — macOS Keychain,
+Windows CAPI, NSS on Linux — so this is likely macOS-first like the rest.
+
+### Smaller things
+
+- **Stale-load detection** in the web UI, so a concurrent Save conflicts loudly
+  instead of overwriting (see [Limitations](#limitations)).
+- **Clipboard portability** — a `creds copy` that picks `pbcopy`/`xclip`/`wl-copy`/
+  `clip.exe` automatically, which also removes the main Linux/WSL gap.
+- **Password expiry awareness** — several kinds can report when a credential is due to
+  expire; surfacing that in `creds doctor` would turn a surprise into a warning.
+- **Graph-driven preflight** — `creds exec` already prints `requires`; it could walk
+  the landscape graph and check reachability of each hop before attempting a logon,
+  so "VPN is down" is reported as such instead of looking like a bad password.
+
+---
+
+## Sister projects
+
+`creds` answers *"what are the credentials and how do I reach it"*. These public
+projects cover the neighbouring problems, and are built to be used alongside it.
+
+| Project | What it does |
+|---|---|
+| **[sap-gui-control-skill](https://github.com/adam0thman/sap-gui-control-skill)** | Drive SAP GUI for Java on macOS through the Accessibility API — no screenshots, no coordinates, no focus stealing — plus headless RFC for anything that does not need a screen. The natural companion once `creds` has got you logged in. |
+| **[sap-basis-ops](https://github.com/adam0thman/sap-basis-ops)** | Claude Code skills for Basis work at the OS and DB layer: start/stop, health triage, housekeeping, transports, kernel and security patching, backup/recovery, and DB-specific commands across HANA, Oracle, ASE, Db2, MaxDB and SQL Server. Cited to help.sap.com. |
+| **[sap-cloud-alm-skill](https://github.com/adam0thman/sap-cloud-alm-skill)** | SAP Cloud ALM: the Implementation and Operations APIs, SAP Activate methodology, tenant setup, and automation scripts. Pairs with an `api` entry here holding the OAuth client credentials. |
+| **[sap-landscape-dashboard](https://github.com/adam0thman/sap-landscape-dashboard)** | Self-hosted landscape dashboard — card wall per environment, live latency, filesystem and SLD inventory. Where this repo's graph models *how you connect*, that one visualises *how the estate is doing*. |
+
+They share a design stance: prefer the headless path, never guess when the system can
+be asked, and say plainly which parts are verified and which are inferred.
 
 ---
 
