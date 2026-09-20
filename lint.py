@@ -22,7 +22,7 @@ import urllib.parse
 
 ENVS = {"dev", "qas", "tst", "prd", "sbx", "trn", "all"}
 KINDS = {"abap", "java", "ssh", "hana", "rdp", "bo", "api", "vpn", "router", "sftp",
-         "vmware", "rfc", "sapgui", "jco", "nco", "odata", "file"}
+         "vmware", "rfc", "sapgui", "jco", "nco", "odata", "file", "webdisp", "scc", "suser"}
 LEGACY_KINDS = {"rfc", "sapgui"}          # superseded by the merged `abap` kind
 IPISH = re.compile(r"(^|-)\d{1,3}-\d{1,3}-\d{1,3}(-|$)")
 
@@ -130,9 +130,10 @@ def lint(index, customer=None, nonconforming=None):
         # fields.url -- the origin a browser page is matched against before a password
         # is filled. A bad value is worse than none: it either never matches (dead
         # weight nobody re-checks) or points somewhere a secret must not go.
-        url = (e.get("fields") or {}).get("url")
-        if url:
-            why = check_url(str(url))
+        # fields.url may list several origins, whitespace-separated -- one system often
+        # answers on more than one name. Each is checked on its own.
+        for url in str((e.get("fields") or {}).get("url") or "").split():
+            why = check_url(url)
             if why:
                 say(WARN, eid, why)
 

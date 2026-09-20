@@ -53,13 +53,47 @@ def origin_of(url):
     return (s.scheme.lower(), s.hostname.lower(), port or (443 if s.scheme == "https" else 80))
 
 
+def urls_of_env():
+    """Every origin in CREDS_URL. fields.url may list several, whitespace-separated."""
+    return (os.environ.get("CREDS_URL") or "").split()
+
+
+def settle(page, PWTimeout):
+    """Wait for a redirect chain to finish and a password box to appear, if it will.
+
+    Two waits, both best-effort: networkidle for the SAML hops, then the password
+    field itself for pages that render it with JavaScript afterwards. A timeout is not
+    an error here -- absence is reported properly by the field picker.
+    """
+    for wait in (lambda: page.wait_for_load_state("networkidle", timeout=30000),
+                 lambda: page.wait_for_selector("input[type=password]",
+                                                state="visible", timeout=20000)):
+        try:
+            wait()
+        except PWTimeout:
+            pass
+
+
+def url_origin_str(url):
+    """"scheme://host[:port]" for a url, or the url itself if it will not parse."""
+    o = origin_of(url)
+    if not o:
+        return url
+    return f"{o[0]}://{o[1]}" + ("" if o[2] in (80, 443) else f":{o[2]}")
+
+
 def target_url(args):
-    """Where to go: the argument, else the entry's url, else build one from host."""
+    """Where to go: the argument, else the FIRST entry url, else built from host.
+
+    An entry may list several origins -- a public vanity name and an internal one, or a
+    pair behind a VIP. Only one can be navigated to, so the first wins and the rest stay
+    valid destinations for the origin check below.
+    """
     if args.url:
         return args.url
-    url = os.environ.get("CREDS_URL")
-    if url:
-        return url
+    urls = urls_of_env()
+    if urls:
+        return urls[0]
     host = os.environ.get("CREDS_HOST")
     port = os.environ.get("CREDS_PORT")
     if not host:
@@ -82,7 +116,26 @@ def submit_once(page):
         raise RuntimeError("refusing a second logon attempt in one run "
                            "(repeated failures lock accounts)")
     _submitted = True
-    page.keyboard.press("Enter")
+    # Prefer the form's OWN submit button. A UI5 identity-first page (SAP ID is one)
+    # ignores Enter entirely, and a form that never submitted looks exactly like a
+    # rejected password if you only check whether the password box is still there.
+    clicked = page.evaluate("""() => {
+      const pw = document.querySelector('input[type=password]');
+      // Do NOT scope the search to the form's subtree. HTML5 lets a submit button sit
+      // anywhere and bind to its form by the `form` attribute -- SAP ID's "Continue"
+      // is outside <form id=logOnForm> exactly so. The DOM's .form property resolves
+      // that association whatever the nesting, which a CSS descendant selector cannot.
+      const btns = Array.from(
+          document.querySelectorAll('button[type=submit], input[type=submit]'))
+        .filter(b => b.offsetParent && !b.disabled);
+      const btn = (pw && btns.find(b => b.form && b.form === pw.form)) || btns[0];
+      if (!btn) return false;
+      btn.click();
+      return true;
+    }""")
+    if not clicked:
+        page.keyboard.press("Enter")
+    return clicked
 
 
 def selftest():
@@ -107,6 +160,11 @@ def selftest():
     assert target_url(A) == "http://h.example.com:50000"
     os.environ["CREDS_URL"] = "https://explicit.example.com/login"
     assert target_url(A) == "https://explicit.example.com/login", "fields.url wins over host"
+    # Several origins on one entry: navigate to the first, accept any of them.
+    os.environ["CREDS_URL"] = "https://me.example.com https://launchpad.example.com"
+    assert target_url(A) == "https://me.example.com", "must not navigate to the whole list"
+    assert len(urls_of_env()) == 2
+    assert origin_of(target_url(A)) == ("https", "me.example.com", 443)
     A.url = "https://argument.example.com"
     assert target_url(A) == "https://argument.example.com", "an argument wins over both"
     for k in ("CREDS_URL", "CREDS_HOST", "CREDS_PORT"):
@@ -118,6 +176,7 @@ def selftest():
 
     class _P:
         def __init__(self): self.keyboard = _KB()
+        def evaluate(self, _): return False       # no button -> falls back to Enter
 
     global _submitted
     _submitted = False
@@ -168,11 +227,13 @@ def main(argv):
     if not expect:
         print(f"creds browser: {url!r} is not an http(s) url", file=sys.stderr)
         return 2
-    expect_origin = f"{expect[0]}://{expect[1]}" + (
-        "" if expect[2] in (80, 443) else f":{expect[2]}")
+    # Landing on ANY origin the entry lists is fine -- following a link from the public
+    # name to the internal one is not a redirect to somewhere unintended.
+    allowed = {o for o in (origin_of(u) for u in ([url] + urls_of_env())) if o}
 
     try:
         from playwright.sync_api import sync_playwright
+        from playwright.sync_api import TimeoutError as PWTimeout
     except ImportError:
         print(INSTALL, file=sys.stderr)
         return 3
@@ -190,8 +251,16 @@ def main(argv):
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
 
+            # SAML and IdP flows are several redirects deep and domcontentloaded fires
+            # on the FIRST hop. Settling matters twice over: an injected script does not
+            # survive the next navigation, and -- the security half -- the origin check
+            # below must judge the page that will actually receive the password, not an
+            # intermediate one it happened to bounce through.
+            settle(page, PWTimeout)
             landed = page.evaluate("location.origin")
-            if landed != expect_origin and not args.allow_redirect:
+            if landed != url_origin_str(url):
+                print(f"creds browser: followed a redirect to {landed}", file=sys.stderr)
+            if origin_of(landed) not in allowed and not args.allow_redirect:
                 # A redirect to another origin is normal for SAML -- and is also how a
                 # credential ends up at an identity provider you did not intend. Opt in.
                 print(f"creds browser: refused -- {url} redirected to {landed}.\n"
@@ -200,10 +269,54 @@ def main(argv):
                 return 4
 
             # One implementation of field detection, shared with the extension.
-            page.add_script_tag(content=FILL_JS.read_text())
+            #
+            # NOT add_script_tag: a real logon page worth protecting sets a Content
+            # Security Policy, and accounts.sap.com blocks injected inline scripts
+            # outright. page.evaluate goes through CDP, which CSP does not govern.
+            # Wrapped in an arrow function so Playwright calls it rather than trying
+            # to interpret the file's own leading IIFE.
+            def inject():
+                page.evaluate("() => {\n" + FILL_JS.read_text() + "\n}")
+
+            # A late redirect can still destroy the context mid-injection; one retry
+            # after re-settling is enough, and failing loudly beats filling blind.
+            try:
+                inject()
+            except Exception:
+                try:
+                    page.wait_for_load_state("networkidle", timeout=15000)
+                except PWTimeout:
+                    pass
+                landed = page.evaluate("location.origin")
+                if origin_of(landed) not in allowed and not args.allow_redirect:
+                    print(f"creds browser: refused -- ended on {landed}", file=sys.stderr)
+                    return 4
+                inject()
             result = page.evaluate(
                 "([u, s, o]) => window.__creds_fill(u, s, o)",
                 [user, secret, landed])
+
+            if not result.get("ok") and result.get("reason") == "no-password-field" and user:
+                # Identity-first logon (SAP ID, Microsoft, Okta): the user id screen
+                # comes first and the password box does not exist until it is answered.
+                # Advancing sends NO password, so it costs nothing against lockout --
+                # which is why this may happen automatically, and exactly once.
+                box = page.query_selector("input[type=email], input[type=text]")
+                if box and box.is_visible():
+                    print("creds browser: identity-first logon -- entering the user id",
+                          file=sys.stderr)
+                    box.fill(user)
+                    box.press("Enter")
+                    settle(page, PWTimeout)
+                    landed = page.evaluate("location.origin")
+                    if origin_of(landed) not in allowed and not args.allow_redirect:
+                        print(f"creds browser: refused -- ended on {landed}",
+                              file=sys.stderr)
+                        return 4
+                    inject()
+                    result = page.evaluate(
+                        "([u, s, o]) => window.__creds_fill(u, s, o)",
+                        [user, secret, landed])
 
             if not result.get("ok"):
                 print(f"creds browser: could not fill -- {result.get('reason')}",
@@ -215,14 +328,32 @@ def main(argv):
             else:
                 # fill.js never submits, by design. Submitting is a separate, deliberate
                 # act here -- and it happens exactly once.
+                before = page.url
                 submit_once(page)
-                page.wait_for_load_state("networkidle", timeout=45000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=45000)
+                except PWTimeout:
+                    pass
                 still_asking = page.evaluate(
                     "!!document.querySelector('input[type=password]')")
+                # An error the page itself shows is the only positive evidence that a
+                # credential was rejected.
+                complaint = page.evaluate("""() => {
+                  const el = document.querySelector(
+                    '[role=alert], .sapMMessageStrip, .errorMessage, [class*=error i]');
+                  return el && el.offsetParent ? (el.innerText || '').trim().slice(0, 200) : '';
+                }""")
                 title = page.title()
-                if still_asking:
-                    print(f"creds browser: logon appears to have FAILED "
-                          f"(password field still present) -- {title}", file=sys.stderr)
+                if still_asking and not complaint and page.url == before:
+                    # Nothing moved and nothing complained: the form never went. Saying
+                    # "wrong password" here would send someone to reset a working one.
+                    print("creds browser: the form did not submit -- no request was "
+                          "made, so NO logon attempt was used", file=sys.stderr)
+                    rc = 7
+                elif still_asking:
+                    print(f"creds browser: logon REJECTED -- "
+                          f"{complaint or title or 'still on the logon page'}",
+                          file=sys.stderr)
                     print("  Not retrying: repeated failures lock accounts.",
                           file=sys.stderr)
                     rc = 6

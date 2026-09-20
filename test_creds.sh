@@ -907,10 +907,30 @@ check "vmware verifies TLS by default and names the opt-out on a cert error" \
 check "vmware falls back to the 6.5/6.7 session path" \
   'grep -q "/rest/com/vmware/cis/session" "$HERE/ui_server.py"'
 
+# A kind must be known to lint (so it is not warned about), migrate (so it gets an
+# identity token) and the editor (so selecting it does not silently blank the field).
+# Matches the kind name itself, not the text around it -- adding a neighbouring kind
+# must not break this.
+kind_registered() {
+  grep -q "\"$1\"" "$HERE/lint.py" &&
+  grep -q "\"$1\"" "$HERE/migrate.py" &&
+  grep -q "\"$1\"" "$HERE/ui.html"
+}
+
 check "the vmware kind is registered in lint, migrate and the editor alike" \
-  'grep -q "\"vmware\"" "$HERE/lint.py" && \
-   grep -q "\"rdp\", \"bo\", \"vmware\"" "$HERE/migrate.py" && \
-   grep -q "\"rdp\",$" "$HERE/ui.html" && grep -q "\"vmware\", \"db\"" "$HERE/ui.html"'
+  'kind_registered vmware'
+
+check "the webdisp kind is registered in lint, migrate and the editor alike" \
+  'kind_registered webdisp'
+
+check "the scc kind is registered in lint, migrate and the editor alike" \
+  'kind_registered scc'
+
+check "the suser kind is registered in lint, migrate and the editor alike" \
+  'kind_registered suser'
+
+check "an unregistered kind is not silently accepted" \
+  '! kind_registered kubernetes'
 
 check "lint warns about a kind the tooling does not know" \
   'printf "%s" "{\"version\":1,\"entries\":[{\"id\":\"z-dev-kubernetes-box\",\"customer\":\"z\",\"env\":\"dev\",\"kind\":\"kubernetes\",\"host\":\"h\",\"fields\":{}}]}" > "$TD/unk.json"; \
@@ -965,7 +985,10 @@ cat > "$TD/nm.json" <<'JSON'
   "host":"d01.acme.test",
   "logins":[{"client":"100","user":"DDIC","secret":"nmloginpw789"},
             {"client":"200","user":"SAPUSER","secret":"nmloginpw200"}],
-  "fields":{"url":"https://d01.acme.test"}}
+  "fields":{"url":"https://d01.acme.test"}},
+ {"id":"acme-dev-webdisp-ws1","customer":"acme","env":"dev","kind":"webdisp",
+  "host":"vip.acme.test","user":"custadmin","secret":"nmwdpw001",
+  "fields":{"url":"https://vip.acme.test https://ws1.acme.test:8443"}}
 ]}
 JSON
 age -R "$TD/recipients.txt" -o "$TD/creds.age" "$TD/nm.json"
@@ -979,7 +1002,7 @@ nm() {
 }
 
 check "nm ping reports a healthy index" \
-  'nm ping | jq -e ".ok and .with_url == 3" >/dev/null'
+  'nm ping | jq -e ".ok and .with_url == 4" >/dev/null'
 
 check "nm matches plaintext http on a private address" \
   '[ "$(nm match http://10.70.1.1:50000 | jq -r ".candidates[0].id")" = "acme-dev-java-pi" ]'
@@ -998,6 +1021,20 @@ check "nm refuses plaintext http to a public host" \
 
 check "nm finds a credential stored in logins[], not just flat fields" \
   '[ "$(nm match https://d01.acme.test | jq -r ".candidates[0].user")" = "DDIC" ]'
+
+# One system, several names: an internal hostname and a public VIP, or a dispatcher
+# pair behind one URL. Each origin in fields.url is matched on its own.
+check "nm matches the first of several urls on one entry" \
+  '[ "$(nm match https://vip.acme.test | jq -r ".candidates[0].id")" = "acme-dev-webdisp-ws1" ]'
+
+check "nm matches a later url, with its own host and port" \
+  '[ "$(nm match https://ws1.acme.test:8443 | jq -r ".candidates[0].id")" = "acme-dev-webdisp-ws1" ]'
+
+check "a multi-url entry still refuses an origin it does not list" \
+  '[ "$(nm match https://ws9.acme.test:8443 | jq ".candidates|length")" = "0" ]'
+
+check "a port that is not listed does not match" \
+  '[ "$(nm match https://ws1.acme.test | jq ".candidates|length")" = "0" ]'
 
 # Paired with the next check: this proves the secret really is reachable, which is what
 # stops "match never returns a secret" from passing vacuously.
@@ -1033,6 +1070,8 @@ check "nm fill does not leak a sibling login on the same system" \
 # declarative content script and never a blanket host permission. Losing that means
 # the extension is present on every page you visit instead of only when you click it.
 # ---- creds browser (playwright, disposable profile) ------------------------
+# Covers origin parsing, url precedence, the multi-url split (navigate to ONE of
+# several, not the whole string) and the one-attempt logon guard.
 check "browser.py pure logic passes its selftest" \
   '"$HERE/browser.py" --selftest >/dev/null 2>&1 || python3 "$HERE/browser.py" --selftest >/dev/null'
 
@@ -1060,7 +1099,7 @@ check "browser.py refuses a second logon attempt in one run" \
 
 check "browser.py refuses a cross-origin redirect unless asked" \
   'grep -q "allow-redirect" "$HERE/browser.py" && \
-   grep -q "landed != expect_origin and not args.allow_redirect" "$HERE/browser.py"'
+   grep -q "origin_of(landed) not in allowed and not args.allow_redirect" "$HERE/browser.py"'
 
 check "browser.py uses a disposable in-memory context, never a persistent profile" \
   '! grep -qE "launch_persistent_context\(|user_data_dir *=" "$HERE/browser.py" && \

@@ -623,10 +623,24 @@ a script misnavigates it is not logged in as you anywhere, and your own browser 
 usable because there is no profile lock to contend with. On close, cookies and web
 storage are cleared explicitly as well.
 
+**"Did not submit" is not "wrong password".** If nothing navigated and the page raised
+no complaint, that is reported as *no logon attempt was used* — because telling someone
+their password failed when the form never went would send them to reset a working one.
+
 **One attempt, ever.** `submit_once()` refuses a second logon in the same run. Many
 accounts lock after three failures and some SAP systems after three, so this is a
 runtime guard rather than a convention — a retry loop added later raises instead of
 locking a real admin account.
+
+**Real logon pages, not toy ones.** Four things a live SAP logon does that a simple
+filler gets wrong, all handled:
+
+| What the page does | What happens |
+|---|---|
+| several SAML redirects | waits for the chain to settle *before* the origin check, so the check judges the page that will actually receive the password |
+| a Content Security Policy | fills via CDP rather than an injected `<script>`, which `accounts.sap.com` blocks |
+| identity-first logon (user id, then password on the next screen) | answers the first screen and continues — no password is sent, so it costs nothing against lockout |
+| a submit button outside its own `<form>` | finds it by the DOM's `.form` property, not by CSS nesting |
 
 **Cross-origin redirects are refused** unless you pass `--allow-redirect`. A logon URL
 that bounces to another origin is normal for SAML, and is also how a credential reaches

@@ -199,7 +199,7 @@ const pwNote = e => {
 
 const TOP = ["id", "customer", "env", "kind", "host", "port", "user", "secret", "via"];
 const KINDS = ["abap", "java", "hana", "ssh", "sftp", "odata", "api", "bo", "vpn", "rdp",
-               "vmware", "db", "file", "other", "rfc", "sapgui", "jco", "nco"];
+               "vmware", "webdisp", "scc", "suser", "db", "file", "other", "rfc", "sapgui", "jco", "nco"];
 
 // Kinds where one system legitimately has several (client, user, password) sets.
 // SAP GUI and RFC are two ports on one ABAP system sharing one login, so they are
@@ -222,6 +222,11 @@ const KIND_FIELDS = {
   rdp:    [],
   vpn:    [],
   ssh:    [], sftp: [], file: [], odata: ["client"],
+  // Reached by URL, not by SID or instance number. fields.url may list several,
+  // whitespace-separated -- a dispatcher pair behind one VIP is the normal case.
+  webdisp: ["url"],
+  scc:     ["url"],
+  suser:   ["url"],
 };
 const ENVS = ["dev", "tst", "qas", "sbx", "trn", "prd"];
 
@@ -484,6 +489,13 @@ function defaultProtocols(e) {
   if (e.kind === "bo") return [{ type: "tcp", port: e.port || 8443 }, { type: "bo" }];
   if (e.kind === "vpn") return [{ type: "tcp", port: e.port || 443 }];
   if (e.kind === "rdp") return [{ type: "tcp", port: e.port || 3389 }, { type: "rdp" }];
+  // Reachability only. Neither has a logon probe yet, and claiming one that merely
+  // fetches the admin page would report "reachable" as if it were "credentials work".
+  if (e.kind === "webdisp") return [{ type: "tcp", port: e.port || 443 }];
+  if (e.kind === "scc") return [{ type: "tcp", port: e.port || 8443 }];
+  // SAP Support Portal. Reachability only: a logon probe against SAP's own IdP would
+  // burn attempts on an account whose lockout is not ours to risk.
+  if (e.kind === "suser") return [{ type: "tcp", port: 443 }];
   return [{ type: "tcp" }];
 }
 

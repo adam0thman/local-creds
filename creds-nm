@@ -99,6 +99,18 @@ def fillable(entry_url, page_origin):
 
 # ---- index ----------------------------------------------------------------
 
+def urls_of(entry):
+    """Every origin in fields.url, which may list more than one.
+
+    One system routinely answers on several names: an internal hostname and a public
+    vanity URL, a pair of web dispatchers behind one VIP, or a service reached through
+    both a VPN address and a reverse proxy. Whitespace-separated, so a single URL --
+    the common case -- needs no special syntax.
+    """
+    raw = (entry.get("fields") or {}).get("url") or ""
+    return str(raw).split()
+
+
 def decrypt():
     if AGE is None:
         raise RuntimeError("age binary not found")
@@ -127,8 +139,7 @@ def candidates(index, page_origin):
     """Every (entry, client, user, secret) whose url matches `page_origin`."""
     hits = []
     for e in index.get("entries") or []:
-        url = (e.get("fields") or {}).get("url")
-        if not url or not fillable(str(url), page_origin):
+        if not any(fillable(u, page_origin) for u in urls_of(e)):
             continue
         for client, user, secret in logins_of(e):
             if user or secret:
@@ -187,8 +198,7 @@ def cmd_ping(_req):
     n = None
     if not problems:
         try:
-            n = len([e for e in (decrypt().get("entries") or [])
-                     if (e.get("fields") or {}).get("url")])
+            n = len([e for e in (decrypt().get("entries") or []) if urls_of(e)])
         except Exception as exc:
             problems.append(str(exc))
     return {"ok": not problems, "problems": problems, "with_url": n}
