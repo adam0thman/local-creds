@@ -81,7 +81,8 @@ function row(hit, origin) {
   el.dataset.hay = hay(hit);
   el.innerHTML = `
     <div class="id">${esc(hit.id)}<span class="env${hit.prod ? " prod" : ""}">${esc(hit.env || "?")}</span></div>
-    <div class="who">${esc(hit.user)}${hit.client ? " · client " + esc(hit.client) : ""}</div>
+    <div class="who">${esc(hit.user)}${hit.client
+      ? ` · ${hit.kind === "abap" ? "client" : "idp"} ` + esc(hit.client) : ""}</div>
     ${hit.prod ? `<p class="warn">⚠ PRODUCTION</p>` : ""}
     <div class="btns"><button data-act="fill" class="primary">Fill</button>
                       <button data-act="user">Copy user</button>

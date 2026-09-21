@@ -199,13 +199,17 @@ const pwNote = e => {
 
 const TOP = ["id", "customer", "env", "kind", "host", "port", "user", "secret", "via"];
 const KINDS = ["abap", "java", "hana", "ssh", "sftp", "odata", "api", "bo", "vpn", "rdp",
-               "vmware", "webdisp", "scc", "suser", "db", "file", "other", "rfc", "sapgui", "jco", "nco"];
+               "vmware", "webdisp", "scc", "suser", "web", "db", "file", "other", "rfc", "sapgui", "jco", "nco"];
 
 // Kinds where one system legitimately has several (client, user, password) sets.
 // SAP GUI and RFC are two ports on one ABAP system sharing one login, so they are
 // one `abap` entry: ports in protocols[], accounts in logins[].
-const LOGIN_KINDS = ["abap"];
+const LOGIN_KINDS = ["abap", "web"];
 const usesLogins = e => LOGIN_KINDS.includes(e.kind);
+// What the login rows' first column actually holds for this kind. The selection
+// machinery is generic -- `creds exec --client X` picks on it either way -- but
+// labelling an identity provider "client" in an SAP tool is actively misleading.
+const loginScope = e => (e.kind === "abap" ? "client" : "idp");
 
 // Fields a kind needs before it can actually be used. Surfaced in the editor so an
 // entry that looks complete but cannot connect is visible at a glance.
@@ -227,6 +231,7 @@ const KIND_FIELDS = {
   webdisp: ["url"],
   scc:     ["url"],
   suser:   ["url"],
+  web:     ["url"],
 };
 const ENVS = ["dev", "tst", "qas", "sbx", "trn", "prd"];
 
@@ -394,7 +399,7 @@ function drawLogins() {
       <button class="star" data-i="${i}" title="${l.default ? "default login" : "make default"}"
               type="button">${l.default ? "★" : "☆"}</button>
       <input type="text" data-i="${i}" data-k="client" value="${esc(l.client ?? "")}"
-             placeholder="client" aria-label="client">
+             placeholder="${loginScope(e)}" aria-label="${loginScope(e)}">
       <input type="text" data-i="${i}" data-k="user" value="${esc(l.user ?? "")}"
              placeholder="user" aria-label="user">
       <input type="text" class="lsec" data-i="${i}" readonly value="${esc(l.secret ?? "")}"
@@ -496,6 +501,7 @@ function defaultProtocols(e) {
   // SAP Support Portal. Reachability only: a logon probe against SAP's own IdP would
   // burn attempts on an account whose lockout is not ours to risk.
   if (e.kind === "suser") return [{ type: "tcp", port: 443 }];
+  if (e.kind === "web") return [{ type: "tcp", port: e.port || 443 }];
   return [{ type: "tcp" }];
 }
 

@@ -46,7 +46,7 @@ def identity(e, sid):
         return slug(sid)
     if kind == "hana":
         return "-".join(x for x in (slug(sid), slug(f.get("tenant"))) if x)
-    if kind in ("ssh", "sftp", "rdp", "bo", "vmware", "scc", "webdisp"):
+    if kind in ("ssh", "sftp", "rdp", "bo", "vmware", "scc", "webdisp", "web"):
         # Host-level access: the machine is the identity, not the SID it happens to run.
         return label(e.get("host")) or slug(sid)
     if kind == "suser":

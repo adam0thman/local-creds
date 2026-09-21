@@ -537,8 +537,10 @@ check "lint warns when requires points at a renamed/missing entry" \
 check "lint does not warn about prefixed free-text requires" \
   '! "$HERE/creds" lint 2>&1 | grep -qE "requires .(internet|vpn:ok)."'
 
+# Matches membership, not the exact array -- adding another multi-login kind must
+# not break this.
 check "the ui offers abap and knows it takes logins" \
-  'grep -q "const LOGIN_KINDS = \[\"abap\"\]" "$HERE/ui.html" && grep -q "abap.*hana.*ssh" "$HERE/ui.html"'
+  'grep -q "const LOGIN_KINDS = \[.*\"abap\".*\]" "$HERE/ui.html" && grep -q "abap.*hana.*ssh" "$HERE/ui.html"'
 
 check "the abap connection grid hides the flat user/secret" \
   'grep -q "usesLogins(e) && (k === \"user\" || k === \"secret\")" "$HERE/ui.html"'
@@ -928,6 +930,17 @@ check "the scc kind is registered in lint, migrate and the editor alike" \
 
 check "the suser kind is registered in lint, migrate and the editor alike" \
   'kind_registered suser'
+
+check "the web kind is registered in lint, migrate and the editor alike" \
+  'kind_registered web'
+
+# A SaaS tenant reached through two identity providers is the same shape as one ABAP
+# system with several clients: one entry, several (scope, user, password) sets.
+check "the web kind may carry several logins" \
+  'grep -q "const LOGIN_KINDS = \[.*\"web\".*\]" "$HERE/ui.html"'
+
+check "the login scope column is labelled per kind, not always client" \
+  'grep -q "loginScope" "$HERE/ui.html"'
 
 check "an unregistered kind is not silently accepted" \
   '! kind_registered kubernetes'
