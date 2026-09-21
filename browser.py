@@ -58,6 +58,33 @@ def urls_of_env():
     return (os.environ.get("CREDS_URL") or "").split()
 
 
+def choose_idp(page, scope):
+    """Click the identity provider named by `scope` on a chooser page.
+
+    BTP puts an "or sign in with:" page in front of anything wired to more than one
+    identity provider -- no form, just links. Matching on the link's href as well as
+    its text matters: SAP labels its own one "Default Identity Provider", which names
+    no host at all, while the href says accounts.sap.com.
+
+    Clicking a chooser sends no credential, so this cannot cost a lockout attempt.
+    Returns the chosen link's text, or None.
+    """
+    if not scope:
+        return None
+    return page.evaluate("""(scope) => {
+      const want = scope.toLowerCase();
+      const links = Array.from(document.querySelectorAll('a[href], button'))
+        .filter(a => a.offsetParent);
+      const hit = links.find(a =>
+        (a.innerText || '').toLowerCase().includes(want) ||
+        (a.getAttribute('href') || '').toLowerCase().includes(want));
+      if (!hit) return null;
+      const label = (hit.innerText || hit.getAttribute('href') || '').trim().slice(0, 60);
+      hit.click();
+      return label;
+    }""", scope)
+
+
 def settle(page, PWTimeout):
     """Wait for a redirect chain to finish and a password box to appear, if it will.
 
@@ -353,6 +380,40 @@ def main(argv):
                     print("creds browser: the password screen never appeared",
                           file=sys.stderr)
                     return 5
+
+            if not result.get("ok") and result.get("reason") == "no-password-field":
+                # No form at all may mean an identity-provider chooser rather than a
+                # page we cannot handle. Which one to pick is the login's scope --
+                # `creds exec --client <idp>` -- so this never guesses.
+                chosen = choose_idp(page, os.environ.get("CREDS_CLIENT"))
+                if chosen:
+                    print(f"creds browser: identity provider -- {chosen}",
+                          file=sys.stderr)
+                    settle(page, PWTimeout)
+                    landed = probe(page, "location.origin", PWTimeout, landed)
+                    if origin_of(landed) not in allowed and not args.allow_redirect:
+                        print(f"creds browser: refused -- ended on {landed}",
+                              file=sys.stderr)
+                        return 4
+                    inject()
+                    result = page.evaluate(
+                        "([u, s, o]) => window.__creds_fill(u, s, o)",
+                        [user, secret, landed])
+                    if result.get("ok") and result.get("step") == "username":
+                        print("creds browser: identity-first logon -- entering the user id",
+                              file=sys.stderr)
+                        if not _click_submit(page):
+                            page.keyboard.press("Enter")
+                        settle(page, PWTimeout)
+                        landed = probe(page, "location.origin", PWTimeout, landed)
+                        if origin_of(landed) not in allowed and not args.allow_redirect:
+                            print(f"creds browser: refused -- ended on {landed}",
+                                  file=sys.stderr)
+                            return 4
+                        inject()
+                        result = page.evaluate(
+                            "([u, s, o]) => window.__creds_fill(u, s, o)",
+                            [user, secret, landed])
 
             if not result.get("ok"):
                 print(f"creds browser: could not fill -- {result.get('reason')}",

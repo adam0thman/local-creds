@@ -1088,6 +1088,10 @@ check "nm fill does not leak a sibling login on the same system" \
 check "browser.py pure logic passes its selftest" \
   '"$HERE/browser.py" --selftest >/dev/null 2>&1 || python3 "$HERE/browser.py" --selftest >/dev/null'
 
+# An entry with several logins must be drivable as any of them, not only the default.
+check "creds browser passes --as/--client through to exec" \
+  'awk "/^cmd_browser/,/^}/" "$HERE/creds" | grep -q -- "--as|--client"'
+
 check "creds browser without an id prints usage" \
   '"$HERE/creds" browser 2>&1 | grep -q "usage: creds browser"'
 

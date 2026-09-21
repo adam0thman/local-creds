@@ -123,6 +123,7 @@ creds browser <id>                  # open, fill, log on, leave the window up
 creds browser <id> --headless       # unattended
 creds browser <id> --no-submit      # fill only, no logon attempt, no lockout risk
 creds browser <id> --shot out.png   # screenshot the result
+creds browser --client <idp> <id>   # pick one of several logins on one system
 ```
 
 This is **your** path for anything web-based. The password goes from `creds exec`'s

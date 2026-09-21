@@ -703,6 +703,7 @@ filler gets wrong, all handled:
 | a Content Security Policy | fills via CDP rather than an injected `<script>`, which `accounts.sap.com` blocks |
 | identity-first logon (user id, then password on the next screen) | answers the first screen and continues — no password is sent, so it costs nothing against lockout |
 | a submit button outside its own `<form>` | finds it by the DOM's `.form` property, not by CSS nesting |
+| an identity-provider chooser (BTP "or sign in with:") | clicks the provider named by the login's scope — `creds browser --client <idp>` — so it never guesses which one |
 
 **Cross-origin redirects are refused** unless you pass `--allow-redirect`. A logon URL
 that bounces to another origin is normal for SAML, and is also how a credential reaches

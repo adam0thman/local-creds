@@ -398,9 +398,20 @@ find_jco_lib() {
 # the `requires` notice and the secret handling are the same as every other command --
 # the password reaches browser.py in its environment and never becomes an argument.
 cmd_browser() {
-  [ $# -ge 1 ] || die "usage: creds browser <id> [url] [--headless] [--no-submit] [--shot f]"
+  # --as/--client belong to cmd_exec (they pick which login), everything else to
+  # browser.py. Without this an entry with several logins can only ever be driven
+  # as its default one.
+  sel=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --as|--client) sel="$sel $1 ${2:-}"; shift 2 || die "$1 needs a value" ;;
+      *) break ;;
+    esac
+  done
+  [ $# -ge 1 ] || die "usage: creds browser [--as u] [--client c] <id> [url] [--headless] [--no-submit] [--shot f]"
   id=$1; shift
-  cmd_exec "$id" -- "$(creds_python)" "$SELF/browser.py" "$@"
+  # shellcheck disable=SC2086 -- sel is a deliberately word-split option pair
+  cmd_exec $sel "$id" -- "$(creds_python)" "$SELF/browser.py" "$@"
 }
 
 cmd_rfc() {
