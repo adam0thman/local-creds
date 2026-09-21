@@ -45,12 +45,17 @@ def private_host(h):
     return "." not in h or h.endswith((".local", ".internal", ".lan", ".corp"))
 
 
-def check_url(url):
+def check_url(url, behind_vpn=False):
     """Why fields.url is unusable, or None if it is fine.
 
     `url` is the browser ORIGIN a page is matched against before a password is filled.
     Only scheme://host:port is ever compared -- a path is kept for convenience ("open
     this system") and ignored by matching.
+
+    `behind_vpn` relaxes the plaintext rule. A hosted landscape routinely uses http on
+    an internal port behind a name that looks public (vhtnbdevwd01.hec.bw4hana.tnb.com.my
+    resolves nowhere without the VPN), and the tunnel is what encrypts it. This is the
+    operator's own recorded prerequisite, not an inference.
     """
     u = urllib.parse.urlsplit(url if "//" in url else "//" + url)
     if not u.scheme or not u.hostname:
@@ -62,7 +67,7 @@ def check_url(url):
         u.port
     except ValueError:
         return f"url '{url}' has a non-numeric port"
-    if u.scheme == "http" and not private_host(u.hostname):
+    if u.scheme == "http" and not private_host(u.hostname) and not behind_vpn:
         return (f"url is plaintext http to '{u.hostname}', which does not look like a "
                 f"private address — a password filled there crosses the open internet. "
                 f"Use https, or confirm the host really is internal")
@@ -132,8 +137,9 @@ def lint(index, customer=None, nonconforming=None):
         # weight nobody re-checks) or points somewhere a secret must not go.
         # fields.url may list several origins, whitespace-separated -- one system often
         # answers on more than one name. Each is checked on its own.
+        behind_vpn = any(str(r).lower().startswith("vpn:") for r in (e.get("requires") or []))
         for url in str((e.get("fields") or {}).get("url") or "").split():
-            why = check_url(url)
+            why = check_url(url, behind_vpn)
             if why:
                 say(WARN, eid, why)
 

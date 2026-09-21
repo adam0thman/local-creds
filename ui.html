@@ -204,7 +204,7 @@ const KINDS = ["abap", "java", "hana", "ssh", "sftp", "odata", "api", "bo", "vpn
 // Kinds where one system legitimately has several (client, user, password) sets.
 // SAP GUI and RFC are two ports on one ABAP system sharing one login, so they are
 // one `abap` entry: ports in protocols[], accounts in logins[].
-const LOGIN_KINDS = ["abap", "web"];
+const LOGIN_KINDS = ["abap", "web", "webdisp"];
 const usesLogins = e => LOGIN_KINDS.includes(e.kind);
 // What the login rows' first column actually holds for this kind. The selection
 // machinery is generic -- `creds exec --client X` picks on it either way -- but

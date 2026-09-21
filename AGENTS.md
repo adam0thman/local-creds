@@ -251,6 +251,13 @@ Listing the IdP is also what lets `creds browser` run without `--allow-redirect`
 turns the cross-origin guard back on — it will still refuse an IdP the entry does not
 name, which is the whole point.
 
+**Plaintext `http` is refused to a public-looking host, unless the entry records a
+`vpn:` prerequisite.** A hosted landscape (HEC, RISE) routinely serves an internal port
+over http behind a name that looks routable but resolves nowhere without the tunnel —
+and the tunnel is what encrypts it. That relaxation comes from the operator's own
+recorded prerequisite, never from a guess, so if you add such a URL make sure
+`requires` names the VPN.
+
 Do not invent one. An origin you guessed either never matches (dead weight nobody
 re-checks) or points a credential somewhere unintended.
 

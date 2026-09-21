@@ -970,7 +970,20 @@ url_lint() {
 check "lint accepts plaintext http to a private address" \
   '! url_lint "http://10.70.212.13:50000/dir/start/index.jsp" | grep -q "crosses the open internet"'
 
-check "lint warns about plaintext http to a public host" \
+# A hosted landscape uses http on an internal port behind a public-looking name that
+# resolves nowhere without the tunnel. The entry's own requires says so, and the tunnel
+# is what encrypts it -- so the warning must not fire, or it cries wolf on every
+# HEC/RISE system and stops being read.
+url_lint_vpn() {
+  printf '%s' "{\"version\":1,\"entries\":[{\"id\":\"z-dev-webdisp-d01\",\"customer\":\"z\",\"env\":\"dev\",\"kind\":\"webdisp\",\"host\":\"h\",\"requires\":[\"vpn:acme\"],\"fields\":{\"url\":\"$1\"}}]}" > "$TD/urlv.json"
+  age -R "$TD/recipients.txt" -o "$TD/creds.age" "$TD/urlv.json"
+  "$HERE/creds" lint --all 2>&1
+}
+
+check "lint allows plaintext http when the entry requires a VPN" \
+  '! url_lint_vpn "http://vhtnbdevwd01.hec.example.com:44300/sap/wdisp/admin" | grep -q "crosses the open internet"'
+
+check "lint still warns about plaintext http with no VPN recorded" \
   'url_lint "http://portal.example.com" | grep -q "crosses the open internet"'
 
 check "lint warns about a url with no scheme" \
