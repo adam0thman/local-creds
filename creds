@@ -140,6 +140,17 @@ search() {
                   else ($w | any(. as $t | $hay | contains($t))) end )
       | del(.secret)
       | if .logins then .logins |= map(del(.secret)) else . end
+      # `accounts` is a derived summary: every (user@client) this entry can log on as,
+      # from logins[] if present and the flat user otherwise. Reading `.user` alone is
+      # WRONG on an entry that uses logins[] -- it is empty there -- and that has twice
+      # produced the conclusion "no credential stored" about an entry that had one.
+      # A field that is always correct costs three lines and removes the trap.
+      | .accounts = ( (if (.logins | type) == "array" and (.logins | length) > 0
+                       then .logins | map((.user // "") + (if (.client // "") != ""
+                                                           then " [" + (.client|tostring) + "]"
+                                                           else "" end))
+                       else [ (.user // "") ] end)
+                      | map(select(length > 0)) )
       # A SAProuter route string carries its password inline as /W/<pw>. It lives in
       # `fields`, which is printed in full -- so without this, `creds find` puts a
       # live credential into the terminal and the session transcript.

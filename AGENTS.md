@@ -97,6 +97,12 @@ creds lint --customer <name> --all
 
 `find` output has secrets stripped — it is safe to read and safe to quote back.
 
+**Read `.accounts`, never `.user`, when asking "who can log on here".** An entry that
+keeps its credentials in `logins[]` has an EMPTY top-level `user`, so a summary built
+from `.user` reports "no credential stored" about an entry that has several. That
+mistake has been made twice in this repo. `.accounts` is derived for you — every
+`user [client]` from `logins[]`, or the flat user when there are none.
+
 Kinds you will meet: `abap` `java` `hana` `ssh` `sftp` `rdp` `bo` `api` `odata`
 `vmware` `vpn` `router` `file`, plus `webdisp` (SAP Web Dispatcher), `scc` (SAP Cloud
 Connector) and `suser` (SAP Support Portal account). `rfc`/`sapgui` are legacy and
@@ -276,7 +282,7 @@ and one stray click silently rewrites it. `creds lint` warns about unregistered 
 ## 5. Rules for changing the code
 
 - **Run `sh test_creds.sh` before and after.** It uses a throwaway index and touches no
-  network. 220 checks; keep it at zero failures.
+  network. 231 checks; keep it at zero failures.
 - **Add a check for any non-trivial behaviour you add.** Especially anything touching
   secrets, the production guard, or merging.
 - **Verify a test actually fails when the behaviour breaks.** A check like

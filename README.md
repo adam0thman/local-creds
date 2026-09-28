@@ -952,7 +952,7 @@ your `.backups/`, and SAP JCo (licensed).
 ## Development
 
 ```bash
-sh test_creds.sh          # 220 checks, throwaway index, no network
+sh test_creds.sh          # 231 checks, throwaway index, no network
 ```
 
 The suite creates its own age key and index in a temp dir — it never touches your real

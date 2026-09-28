@@ -1195,3 +1195,17 @@ check "the injected script re-checks the origin inside the page" \
 
 check "the extension manifest pins its id so native messaging keeps working" \
   'jq -e ".key and (.permissions | index(\"nativeMessaging\"))" "$HERE/extension/manifest.json" >/dev/null'
+
+# .user is EMPTY on an entry that keeps its credentials in logins[], and reading it
+# alone has twice produced "no credential stored" about an entry that had one. The
+# derived .accounts field is always right, so a naive read cannot be wrong.
+check "find derives accounts from logins[] when the flat user is empty" \
+  'printf "%s" "{\"version\":1,\"entries\":[{\"id\":\"z-dev-abap-d01\",\"customer\":\"z\",\"env\":\"dev\",\"kind\":\"abap\",\"host\":\"h\",\"user\":\"\",\"secret\":\"\",\"logins\":[{\"client\":\"000\",\"user\":\"DDIC\",\"secret\":\"x\"}],\"fields\":{}}]}" > "$TD/acc.json"; \
+   age -R "$TD/recipients.txt" -o "$TD/creds.age" "$TD/acc.json"; \
+   [ "$("$HERE/creds" find z | jq -r ".[0].accounts[0]")" = "DDIC [000]" ]'
+
+check "find falls back to the flat user when there are no logins" \
+  'printf "%s" "{\"version\":1,\"entries\":[{\"id\":\"z-dev-ssh-h\",\"customer\":\"z\",\"env\":\"dev\",\"kind\":\"ssh\",\"host\":\"h\",\"user\":\"root\",\"secret\":\"x\",\"fields\":{}}]}" > "$TD/acc2.json"; \
+   age -R "$TD/recipients.txt" -o "$TD/creds.age" "$TD/acc2.json"; \
+   [ "$("$HERE/creds" find z | jq -r ".[0].accounts[0]")" = "root" ]'
+
