@@ -199,17 +199,20 @@ const pwNote = e => {
 
 const TOP = ["id", "customer", "env", "kind", "host", "port", "user", "secret", "via"];
 const KINDS = ["abap", "java", "hana", "ssh", "sftp", "odata", "api", "bo", "vpn", "rdp",
-               "vmware", "webdisp", "scc", "suser", "web", "db", "file", "other", "rfc", "sapgui", "jco", "nco"];
+               "vmware", "webdisp", "scc", "suser", "web", "ase", "oracle", "mssql", "db2", "maxdb", "db", "file", "other", "rfc", "sapgui", "jco", "nco"];
 
 // Kinds where one system legitimately has several (client, user, password) sets.
 // SAP GUI and RFC are two ports on one ABAP system sharing one login, so they are
 // one `abap` entry: ports in protocols[], accounts in logins[].
-const LOGIN_KINDS = ["abap", "web", "webdisp"];
+// A database is the same shape: one SID, several accounts (sapsa, sapsso, SYSTEM,
+// SAPHANADB, DBACOCKPIT ...).
+const DB_KINDS = ["hana", "ase", "oracle", "mssql", "db2", "maxdb"];
+const LOGIN_KINDS = ["abap", "web", "webdisp", ...DB_KINDS];
 const usesLogins = e => LOGIN_KINDS.includes(e.kind);
 // What the login rows' first column actually holds for this kind. The selection
 // machinery is generic -- `creds exec --client X` picks on it either way -- but
 // labelling an identity provider "client" in an SAP tool is actively misleading.
-const loginScope = e => (e.kind === "abap" ? "client" : "idp");
+const loginScope = e => (e.kind === "abap" ? "client" : DB_KINDS.includes(e.kind) ? "database" : "idp");
 
 // Fields a kind needs before it can actually be used. Surfaced in the editor so an
 // entry that looks complete but cannot connect is visible at a glance.
@@ -232,6 +235,8 @@ const KIND_FIELDS = {
   scc:     ["url"],
   suser:   ["url"],
   web:     ["url"],
+  // The SID names the database; the listener port lives in the top-level port.
+  ase: ["sid"], oracle: ["sid"], mssql: ["sid"], db2: ["sid"], maxdb: ["sid"],
 };
 const ENVS = ["dev", "tst", "qas", "sbx", "trn", "prd"];
 
@@ -292,7 +297,7 @@ function detail() {
     <div id="result" hidden></div>
 
     <fieldset><legend>Connection</legend><div class="grid">
-      ${TOP.filter(k => !(usesLogins(e) && (k === "user" || k === "secret")))
+      ${TOP.filter(k => !(usesLogins(e) && (e.logins || []).length && (k === "user" || k === "secret")))
            .map(k => `<label for="f-${k}">${k}</label>${
         k === "kind" ? `<select id="f-${k}">${KINDS.map(o => `<option${o === e.kind ? " selected" : ""}>${o}</option>`).join("")}</select>`
         : k === "env" ? `<select id="f-${k}">${ENVS.map(o => `<option${o === e.env ? " selected" : ""}>${o}</option>`).join("")}</select>`
@@ -488,6 +493,10 @@ function defaultProtocols(e) {
   }
   if (e.kind === "vmware") return [{ type: "tcp", port: e.port || 443 }, { type: "vmware" }];
   if (e.kind === "hana") return [{ type: "tcp" }, { type: "hana" }];
+  // Reachability only -- no logon probe for these yet. Ports are each product's SAP
+  // install default; a recorded e.port always wins.
+  const DB_PORT = { ase: 4901, oracle: 1521, mssql: 1433, db2: 5912, maxdb: 7210 };
+  if (e.kind in DB_PORT) return [{ type: "tcp", port: e.port || DB_PORT[e.kind] }];
   if (e.kind === "ssh" || e.kind === "sftp") return [{ type: "tcp", port: 22 }, { type: e.kind }];
   if (e.kind === "odata") return [{ type: "odata" }];
   if (e.kind === "api") return [{ type: "tcp", port: e.port || 443 }, { type: "api" }];

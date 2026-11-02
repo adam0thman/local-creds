@@ -333,9 +333,19 @@ check "a row port matching the sysnr convention is not treated as an override" \
 # connection failure). Uses an unreachable host, no real credentials involved. ---
 printf '%s' '{"entry":{"kind":"rdp","host":"10.255.255.1","port":3389,"user":"u","secret":"p"},"protocol":{"type":"rdp"}}' > "$TD/rdp1.json"
 
-if command -v xfreerdp >/dev/null 2>&1; then
+# An xfreerdp that dies in the dynamic loader (a Homebrew dependency upgraded under
+# it) prints nothing the probe recognises. That silence once read as "SUCCEEDED".
+mkdir -p "$TD/brokenbin"
+printf '#!/bin/sh\necho "dyld: Library not loaded: libx265.216.dylib" >&2\nexit 134\n' > "$TD/brokenbin/xfreerdp"
+chmod +x "$TD/brokenbin/xfreerdp"
+check "an xfreerdp that never starts is not reported as a successful logon" \
+  'PATH="$TD/brokenbin:$PATH" "$uipy" -c "import sys; sys.path.insert(0, sys.argv[1]); import ui_server as u; r = u.rdp_test({\"host\": \"h\", \"user\": \"u\", \"secret\": \"p\"}, \"h\", []); sys.exit(r[\"ok\"] is not False or \"inconclusive\" not in r[\"kind\"])" "$HERE"'
+
+if command -v xfreerdp >/dev/null 2>&1 && ! xfreerdp --version 2>&1 | grep -q "Library not loaded"; then
   check "rdp probe distinguishes a network failure from a credential failure" \
     'api_test "$TD/rdp1.json" | jq -e ".ok == false and (.detail | test(\"network layer, not credentials\"))" >/dev/null'
+elif command -v xfreerdp >/dev/null 2>&1; then
+  echo "  skip rdp network-failure check: xfreerdp is installed but cannot load its libraries"
 else
   check "rdp probe reports xfreerdp missing rather than a false pass" \
     'api_test "$TD/rdp1.json" | jq -e ".kind == \"unavailable\"" >/dev/null'
@@ -542,8 +552,10 @@ check "lint does not warn about prefixed free-text requires" \
 check "the ui offers abap and knows it takes logins" \
   'grep -q "const LOGIN_KINDS = \[.*\"abap\".*\]" "$HERE/ui.html" && grep -q "abap.*hana.*ssh" "$HERE/ui.html"'
 
-check "the abap connection grid hides the flat user/secret" \
-  'grep -q "usesLogins(e) && (k === \"user\" || k === \"secret\")" "$HERE/ui.html"'
+# ...but only once logins[] holds something: a flat entry of a login kind would
+# otherwise have its only credential hidden from the editor.
+check "the connection grid hides the flat user/secret only when logins[] is filled" \
+  'grep -q "usesLogins(e) && (e.logins || \[\]).length && (k === \"user\"" "$HERE/ui.html"'
 
 check "a duplicated entry does not inherit its logins passwords" \
   'grep -q "c.logins.map(l => ({ ...l, secret: \"\" }))" "$HERE/ui.html"'
@@ -933,6 +945,19 @@ check "the suser kind is registered in lint, migrate and the editor alike" \
 
 check "the web kind is registered in lint, migrate and the editor alike" \
   'kind_registered web'
+
+for k in ase oracle mssql db2 maxdb; do
+  check "the $k database kind is registered in lint, migrate and the editor alike" \
+    "kind_registered $k"
+done
+
+# sapsa + sapsso on one ASE, SYSTEM + SAPHANADB on one tenant: several accounts per
+# database, so the editor must show logins[] rows for them or they are invisible.
+check "database kinds carry several logins in the editor" \
+  'grep -q "const DB_KINDS = \[\"hana\", \"ase\"" "$HERE/ui.html" && grep -q "const LOGIN_KINDS = \[.*\.\.\.DB_KINDS\]" "$HERE/ui.html"'
+
+check "a database id is identified by SID, not by the host it shares" \
+  '[ "$(cd "$HERE" && python3 -c "import migrate; print(migrate.identity(dict(kind=\"ase\", host=\"bfsop\"), \"SJP\"))")" = "sjp" ]'
 
 # A SaaS tenant reached through two identity providers is the same shape as one ABAP
 # system with several clients: one entry, several (scope, user, password) sets.

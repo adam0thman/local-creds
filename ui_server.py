@@ -717,10 +717,17 @@ def rdp_test(entry, host, notes):
         return {"ok": False, "kind": "rdp (ambiguous)",
                 "detail": f"unrecognised FreeRDP error, not assuming pass or fail: "
                           f"{stray.strip()[:160]}", "notes": notes}
-    return {"ok": True, "kind": "rdp",
-            "detail": f"no ERRCONNECT_ error in the log — auth-only logon SUCCEEDED as {user} "
-                      f"(inferred from absence of error, xfreerdp's own exit code is not reliable "
-                      f"here)", "notes": notes}
+    # Silence is not success: an xfreerdp that never starts (a broken Homebrew dylib
+    # kills it in the loader) prints no ERRCONNECT_ token either. Only trust the
+    # quiet path when NLA actually got as far as completing authentication.
+    if "NLA_STATE_FINAL" in out:
+        return {"ok": True, "kind": "rdp",
+                "detail": f"NLA completed (NLA_STATE_FINAL) with no ERRCONNECT_ error — "
+                          f"auth-only logon SUCCEEDED as {user}", "notes": notes}
+    last = next((ln for ln in reversed(out.splitlines()) if ln.strip()), "(no output)")
+    return {"ok": False, "kind": "rdp (inconclusive)",
+            "detail": f"xfreerdp exited {r.returncode} without reaching authentication — "
+                      f"nothing was proven: {last.strip()[:160]}", "notes": notes}
 
 
 def with_login(entry, sel=None):

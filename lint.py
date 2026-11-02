@@ -22,7 +22,8 @@ import urllib.parse
 
 ENVS = {"dev", "qas", "tst", "prd", "sbx", "trn", "all"}
 KINDS = {"abap", "java", "ssh", "hana", "rdp", "bo", "api", "vpn", "router", "sftp",
-         "vmware", "rfc", "sapgui", "jco", "nco", "odata", "file", "webdisp", "scc", "suser", "web"}
+         "vmware", "rfc", "sapgui", "jco", "nco", "odata", "file", "webdisp", "scc", "suser", "web",
+         "ase", "oracle", "mssql", "db2", "maxdb"}
 LEGACY_KINDS = {"rfc", "sapgui"}          # superseded by the merged `abap` kind
 IPISH = re.compile(r"(^|-)\d{1,3}-\d{1,3}-\d{1,3}(-|$)")
 
